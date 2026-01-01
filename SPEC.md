@@ -2,7 +2,7 @@
 
 **A sequencer for continuous expression and composition**
 
-*Version 0.4 — January 2025*
+*Version 0.5 — January 2025*
 
 ---
 
@@ -13,10 +13,11 @@ canyons is a browser-based live coding environment where **continuous signals ar
 The guiding metaphor: **music programming should feel like shaders for time.**
 
 ```javascript
-// Boléro in 4 lines
+// Boléro in 5 lines
+const _ = null
 const beat = T.mul(72/60)
 
-seq([1,0,0,1,0,0,1,0,0,1,1,1])
+const d1 = seq([60,_,_,60,_,_,60,_,_,60,60,60])
   .at(beat.mul(1.5))
   .vel(T.div(900))
 ```
@@ -39,10 +40,10 @@ canyons has exactly **six primitives**:
 
 ```javascript
 T                              // global time (seconds)
-T.mul(x)  T.add(x)  T.mod(x)  T.sin()  T.lt(x)  // signal math
+T.mul(x)  T.div(x)  T.add(x)  T.mod(x)  T.sin()  T.lt(x)  // signal math
 seq([values]).at(signal)       // sequence driven by signal (loops infinitely)
 .vel()  .gate()  .pressure()  .slide()  .bend()  // stream modifiers
-P                              // note phase (0→1 over each note's duration)
+P                              // note phase: driver.mod(1), i.e. 0→1 per trigger period
 ```
 
 **That's it.** Everything else emerges from these.
@@ -95,12 +96,25 @@ const rubato = T.add(T.div(8).sin().mul(0.2)) // breathing time
 `seq([values]).at(signal)` creates a **Stream**—a playing sequence of notes:
 
 ```javascript
-seq([60, 64, 67]).at(beat)           // C-E-G at 120 BPM
+seq([60, 64, 67]).at(beat)           // C-E-G melody at 120 BPM
 seq([60, 64, 67]).at(beat.mul(2))    // twice as fast
 seq([60, 64, 67]).at(triplet)        // triplet feel
 ```
 
-Streams **auto-play** when created. No `play()` or `out()` needed.
+**Chords** use nested arrays—all notes in the inner array trigger simultaneously:
+
+```javascript
+seq([[60, 64, 67], [65, 69, 72]]).at(beat)  // C major, F major alternating
+seq([60, [64, 67], 72]).at(beat)            // single, chord, single
+```
+
+Streams **auto-play** when created and must be assigned to a named slot:
+
+```javascript
+const d1 = seq([60, 64, 67]).at(beat)  // starts playing
+d1.stop()                               // stops this stream
+hush()                                  // stops all streams
+```
 
 ### 2.3 Stream Modifiers
 
@@ -124,14 +138,15 @@ seq([60, 64, 67]).at(beat)
 
 ### 2.4 Rests
 
-Use `null` or `_` for rests:
+Use `null` (or `_` as shorthand) for rests:
 
 ```javascript
 const _ = null
 
 seq([60, _, 64, _, 67]).at(beat)     // notes with rests
-seq([1,0,0,1,0,0,1,0,0,1,1,1]).at(triplet)  // rhythm pattern
 ```
+
+Note: `0` is MIDI note 0 (C-1), not a rest. Always use `null` for silence.
 
 ### 2.5 Multiple Voices
 
@@ -148,24 +163,24 @@ They stay locked because both derive from `beat`.
 
 ### 2.6 Note Phase (P)
 
-`P` is a special signal: **0→1 progress through each note's duration**.
+`P` is the **fractional part of the driver signal**: `P = driver.mod(1)`.
 
-When a note triggers, `P` starts at 0. When the note ends (gate closes), `P` is 1. This gives you per-note envelopes without needing a separate envelope generator:
+This gives you 0→1 progress through each trigger period, enabling per-note envelopes without needing a separate envelope generator:
 
 ```javascript
 seq([60, 64, 67]).at(beat)
-  .pressure(P.sin())              // pressure swells 0→1→0 over each note
+  .pressure(P.sin())              // pressure swells 0→1→0 over each trigger period
   .pressure(P.mul(Math.PI).sin()) // same, explicit half-sine
-  .slide(P)                       // slide ramps 0→1 over each note
+  .slide(P)                       // slide ramps 0→1 over each trigger period
   .vel(P.lt(0.5).mul(0.3).add(0.5)) // louder in first half
 ```
 
-`P` makes per-note expression work regardless of rhythm:
+`P` is independent of gate—it tracks position within the trigger period, not note duration. This makes it predictable and trivially computable:
 
 ```javascript
-// Works with irregular rhythms
+// Works with any rhythm
 seq([60, 64, 67]).at(T.mul(1.3))  // weird tempo
-  .pressure(P.sin())               // still swells per-note
+  .pressure(P.sin())               // still swells per trigger period
 ```
 
 ### 2.7 Phrases as Functions
@@ -187,10 +202,11 @@ riff(beat.add(0.5))     // offset by half beat
 ### Boléro
 
 ```javascript
+const _ = null
 const beat = T.mul(72/60)
 const triplet = beat.mul(1.5)
 
-seq([1,0,0,1,0,0,1,0,0,1,1,1])
+const d1 = seq([60,_,_,60,_,_,60,_,_,60,60,60])
   .at(triplet)
   .vel(T.div(900))              // 15-minute crescendo
   .gate(triplet.mod(1).lt(0.3)) // short hits
@@ -202,7 +218,7 @@ seq([1,0,0,1,0,0,1,0,0,1,1,1])
 const breath = T.add(T.div(8).sin().mul(0.2))  // time that breathes
 const beat = breath.mul(66/60)
 
-seq([60, 64, 67, 72, 67, 64])
+const d1 = seq([60, 64, 67, 72, 67, 64])
   .at(beat)
   .vel(beat.mod(1).mul(Math.PI).sin().mul(0.3).add(0.5))
   .gate(beat.mod(1).lt(0.9))
@@ -214,8 +230,8 @@ seq([60, 64, 67, 72, 67, 64])
 const beat = T.mul(2)
 
 // Two phrases, slightly different speeds
-seq([60, 64, 67, 64]).at(beat)
-seq([60, 64, 67, 64]).at(beat.mul(1.01))  // 1% faster → phasing
+const d1 = seq([60, 64, 67, 64]).at(beat)
+const d2 = seq([60, 64, 67, 64]).at(beat.mul(1.01))  // 1% faster → phasing
 ```
 
 ### 3:4 Polyrhythm
@@ -223,8 +239,8 @@ seq([60, 64, 67, 64]).at(beat.mul(1.01))  // 1% faster → phasing
 ```javascript
 const beat = T.mul(2)
 
-seq([48, 55]).at(beat)                    // 2 notes per beat
-seq([60, 63, 67]).at(beat.mul(3/2))       // 3 notes per beat
+const d1 = seq([48, 55]).at(beat)              // 2 notes per beat
+const d2 = seq([60, 63, 67]).at(beat.mul(3/2)) // 3 notes per beat
 ```
 
 ### MPE Cello
@@ -232,12 +248,12 @@ seq([60, 63, 67]).at(beat.mul(3/2))       // 3 notes per beat
 ```javascript
 const beat = T.mul(1)
 
-seq([36, 43, 48, 55])
+const d1 = seq([36, 43, 48, 55])
   .at(beat)
   .vel(T.div(20).mul(0.6).add(0.3))        // slow crescendo over 20 sec
-  .pressure(P.mul(Math.PI).sin())          // bow pressure swell per note
+  .pressure(P.mul(Math.PI).sin())          // bow pressure swell per trigger
   .bend(P.gt(0.2).mul(T.mul(5).sin().mul(0.3)))  // vibrato, delayed onset
-  .slide(P.mul(0.4).add(0.3))              // slide ramps up per note
+  .slide(P.mul(0.4).add(0.3))              // slide ramps up per trigger
 ```
 
 ---
@@ -285,18 +301,21 @@ The fluent API compiles to a minimal IR:
 type SignalIR =
   | { op: 'const', value: number }
   | { op: 'time' }                                    // T
-  | { op: 'phase' }                                   // P (note phase, 0→1)
+  | { op: 'phase' }                                   // P = driver.mod(1)
   | { op: 'add', a: SignalIR, b: SignalIR }
   | { op: 'mul', a: SignalIR, b: SignalIR }
+  | { op: 'div', a: SignalIR, b: SignalIR }
   | { op: 'mod', a: SignalIR, b: SignalIR }
   | { op: 'sin', a: SignalIR }
   | { op: 'floor', a: SignalIR }
   | { op: 'lt', a: SignalIR, b: SignalIR }
   | { op: 'gt', a: SignalIR, b: SignalIR }
-  | { op: 'lookup', table_id: number, index: SignalIR }
+
+type NoteValue = number | number[] | null    // single note, chord, or rest
 
 type StreamIR = {
-  sequence: number[]           // values (MIDI notes or triggers)
+  id: string                   // for lifecycle management
+  sequence: NoteValue[]        // values (MIDI notes, chords, or rests)
   driver: SignalIR             // the .at() signal
   velocity?: SignalIR
   gate?: SignalIR
@@ -371,13 +390,17 @@ Each stream maps to an MPE voice:
 
 **Voice allocation:** Round-robin through MPE channels 2-16. If all 15 are busy, steal the oldest voice.
 
-### 4.6 Timing Targets
+### 4.6 Timing and MPE Defaults
 
 | Parameter | Default | Notes |
 |-----------|---------|-------|
 | Control rate | 500 Hz | Signal evaluation frequency |
 | Lookahead | 50 ms | MIDI scheduling buffer |
 | Jitter target | <2 ms | Note timing accuracy |
+| MPE pitch bend range | ±48 semitones | Per MPE spec default |
+| MPE zone | Lower zone, channels 2-16 | Master channel 1 |
+| Gate threshold | 0.5 | Note-off when gate crosses below |
+| Default gate | `driver.mod(1).lt(0.9)` | 90% of trigger period |
 
 ### 4.7 Hot Reload
 
@@ -397,21 +420,24 @@ When code changes:
 ### 5.1 What Determines Note Duration?
 
 Gate signal controls note lifetime:
-- Note-on fires when driver crosses an integer (forward)
+- Note-on fires when driver crosses an integer (forward only—non-monotonic signals re-trigger)
 - Note-off fires when gate crosses 0.5 downward
 
 Default gate if not specified: `driver.mod(1).lt(0.9)` (90% of each trigger period).
 
-`P` (note phase) is derived from gate: `P = 0` at note-on, `P = 1` when gate would close.
+`P` (note phase) is simply `driver.mod(1)`—the fractional part of the driver. It does not depend on gate. This makes `P` trivially computable without needing to predict when gate will close.
 
-Is 90% the right default? Should there be shorthand for common gates?
+### 5.2 Stream Lifecycle (Resolved)
 
-### 5.2 How to Stop/Manage Streams?
+**Named slots + `hush()`:**
 
-Options:
-- **Line-based:** Present code = playing, delete = stopped
-- **Named slots:** `d1 = seq(...).at(beat)` with `d1 = silence` to stop
-- **Global hush:** `hush()` stops everything
+```javascript
+const d1 = seq([60, 64, 67]).at(beat)  // playing
+d1.stop()                               // stop this stream
+hush()                                  // stop all streams (panic button)
+```
+
+When a stream is stopped or its slot is reassigned, the engine immediately sends Note Off for any active voices. This prevents stuck notes on hot reload.
 
 ### 5.3 Should `T` Be Wall Time or Musical Time?
 
@@ -425,14 +451,14 @@ Alternative: `T` could be "beats" with a global tempo. But this hides the relati
 
 ### 5.4 Per-Note Scoping (Resolved)
 
-Solved by `P` (note phase). Use `P` for any expression that should reset per-note:
+Solved by `P = driver.mod(1)`. Use `P` for any expression that should cycle per trigger:
 
 ```javascript
-.pressure(P.sin())      // resets every note, regardless of rhythm
-.bend(P.gt(0.2).mul(T.mul(5).sin()))  // vibrato with delayed onset per note
+.pressure(P.sin())      // cycles every trigger period
+.bend(P.gt(0.2).mul(T.mul(5).sin()))  // vibrato with delayed onset per trigger
 ```
 
-`P` is 0→1 over the note's duration, making it rhythm-agnostic.
+`P` is 0→1 over each trigger period (not note duration), making it predictable and independent of gate timing.
 
 ---
 
@@ -463,9 +489,10 @@ All of that is sugar. Build the kernel first. Add sugar when the pain reveals wh
 
 ### Phase 1: Signal Engine
 - `T` and `P` proxies that build IR
-- Signal operations (`.mul()`, `.add()`, `.sin()`, etc.)
-- `seq([]).at()` returning Stream
+- Signal operations (`.mul()`, `.div()`, `.add()`, `.mod()`, `.sin()`, `.floor()`, `.lt()`, `.gt()`)
+- `seq([]).at()` returning Stream with id
 - Stream modifiers (`.vel()`, `.gate()`, `.pressure()`, `.slide()`, `.bend()`)
+- Stream lifecycle (`.stop()`, `hush()`)
 - Simple web REPL for testing
 
 ### Phase 2: Audio Thread
