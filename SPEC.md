@@ -2,7 +2,7 @@
 
 **A sequencer for continuous expression and composition**
 
-*Version 0.6 — January 2025*
+*Version 0.8 — January 2025*
 
 ---
 
@@ -13,12 +13,17 @@ canyons is a browser-based live coding environment where **continuous signals ar
 The guiding metaphor: **music programming should feel like shaders for time.**
 
 ```javascript
-// Boléro in 5 lines
-const beat = bpm(72)
+// Hello World — hear sound immediately
+seq([60, 64, 67]).drive(bpm(120)).as('melody')
 
-seq([60,_,_,60,_,_,60,_,_,60,60,60])
-  .at(beat.mul(1.5))
-  .vel(T.div(900))
+// Boléro — the shape governs the piece
+const beat = bpm(72)
+const intensity = crescendo(900)  // 15-minute arc
+
+seq([60, _, _, 60, _, _, 60, _, _, 60, 60, 60])
+  .drive(beat.mul(1.5))
+  .vel(intensity)
+  .gate(p => p.lt(0.3))  // staccato
   .as('snare')
 ```
 
@@ -39,14 +44,15 @@ seq([60,_,_,60,_,_,60,_,_,60,60,60])
 canyons has exactly **six primitives**:
 
 ```javascript
-T                              // global time (seconds)
-T.mul(x)  T.div(x)  T.add(x)  T.mod(x)  T.sin()  T.lt(x)  // signal math
-seq([values]).at(signal)       // sequence driven by signal (loops infinitely)
-.vel()  .gate()  .pressure()  .slide()  .bend()  // stream modifiers
-P                              // note phase: driver.mod(1), i.e. 0→1 per trigger period
+T                                              // global time (seconds)
+T.mul(x)  T.div(x)  T.add(x)  T.sub(x)         // arithmetic
+T.mod(x)  T.sin()  T.floor()                   // shaping
+T.lt(x)  T.gt(x)  T.min(x)  T.max(x)           // comparison/clamping
+seq([values]).drive(signal)                    // sequence driven by signal
+.vel()  .gate()  .pressure()  .slide()  .bend()  .mask()  .inst()  // stream modifiers
 ```
 
-**That's it.** Everything else—including `bpm()`, `swell`, and articulation helpers—lives in the **Standard Prelude**, a JavaScript library that ships by default but is fully inspectable and editable.
+**That's it.** Everything else—`bpm()`, `swell`, `crescendo`, articulation helpers—lives in the **Standard Prelude**, a JavaScript library that ships by default and is fully inspectable.
 
 ### 1.3 The Key Insight
 
@@ -58,246 +64,232 @@ Signal: 0.0 → 0.5 → 1.0 → 1.5 → 2.0 → ...
                   trigger     trigger
 ```
 
-When `seq([60,64,67]).at(signal)` is evaluated:
+When `seq([60,64,67]).drive(signal)` is evaluated:
 - The sequence outputs `values[floor(signal) % length]`
 - A note-on triggers when `floor(signal)` increments
 
 This is how **rubato works naturally**. A slowing tempo means the signal advances more slowly, so triggers occur less frequently—no rescheduling needed.
 
----
+### 1.4 Design Philosophy: Library, Not DSL
 
-## Part 2: The Standard Prelude
+canyons is a **library of composable functions**, not a domain-specific language with magic syntax.
 
-The prelude translates "composer thought" into "signal math." It loads by default and is **visible in the UI** so users can inspect and modify it.
-
-### 2.1 Time Units
-
-```javascript
-// Tempo
-const bpm = (n) => T.mul(n / 60)      // bpm(120) → 2 beats per second
-const hz = (n) => T.mul(n)             // hz(0.5) → cycle every 2 seconds
-
-// Usage
-const beat = bpm(120)                  // instead of T.mul(120/60)
-const slow = bpm(60)
-const fast = bpm(180)
-```
-
-### 2.2 Expression Shapes
-
-```javascript
-// Per-note shapes (use P)
-const swell = P.mul(Math.PI).sin()              // 0→1→0 over trigger period
-const attack = P.lt(0.1).mul(10).mul(P)         // fast rise, sustain
-const release = P.gt(0.8).mul(1 - P).mul(5)     // sustain, fast fall
-
-// Time-varying shapes (use T)
-const breath = (period = 8, depth = 0.2) =>
-  T.add(T.div(period).sin().mul(depth))         // breathing rubato
-
-const vibrato = (rate = 5, depth = 0.3) =>
-  T.mul(rate).sin().mul(depth)                  // pitch oscillation
-
-const crescendo = (duration) => T.div(duration) // linear ramp over duration
-```
-
-### 2.3 Articulation Helpers
-
-```javascript
-// Gate sugar - controls note duration as fraction of trigger period
-Signal.prototype.legato = function() { return this.mod(1).lt(0.95) }
-Signal.prototype.stacc = function() { return this.mod(1).lt(0.3) }
-Signal.prototype.tenuto = function() { return this.mod(1).lt(0.85) }
-
-// Usage
-seq([60, 64, 67]).at(beat).gate(beat.stacc())   // short, punchy
-seq([60, 64, 67]).at(beat).gate(beat.legato())  // smooth, connected
-```
-
-### 2.4 Built-in Rest
-
-```javascript
-const _ = null  // rest/silence in sequences
-
-// Usage - no more "const _ = null" boilerplate
-seq([60, _, 64, _, 67]).at(beat)
-```
-
-The prelude is documentation. Seeing `const swell = P.mul(Math.PI).sin()` teaches what P does better than any explanation.
+- No magic globals that "know" their context
+- Explicit function parameters instead of implicit binding
+- Signal composition happens before passing to modifiers
+- Plain JavaScript that's easy to debug and type-check
 
 ---
 
-## Part 3: The Fluent API
+## Part 2: The Fluent API
 
-### 3.1 Signals
+### 2.1 Signals
 
 `T` is global time in seconds. Signal operations return new signals:
 
 ```javascript
 T                    // 0, 0.001, 0.002, ...
-T.mul(2)             // 0, 0.002, 0.004, ... (2x speed)
-T.add(1)             // 1, 1.001, 1.002, ... (offset)
-T.mod(4)             // 0→4, 0→4, 0→4, ... (loop every 4 sec)
+T.mul(2)             // 2x speed
+T.div(2)             // 0.5x speed
+T.add(1)             // offset by 1
+T.sub(1)             // offset by -1
+T.mod(4)             // loop every 4 seconds
 T.sin()              // sine of T
 T.floor()            // discretize
 T.lt(10)             // 1 while T < 10, else 0
 T.gt(5)              // 1 while T > 5, else 0
+T.min(1).max(0)      // clamp to 0-1
 ```
 
-Compound expressions:
+### 2.2 Sequences and Streams
+
+`seq([values]).drive(signal)` creates a **Stream**—a sequence driven by a signal:
 
 ```javascript
-const beat = bpm(120)                         // 120 BPM (via prelude)
-const triplet = beat.mul(1.5)                 // triplets
-const rubato = breath(8, 0.2).mul(bpm(66))    // breathing time (via prelude)
+seq([60, 64, 67]).drive(beat)           // C-E-G at tempo
+seq([60, 64, 67]).drive(beat.mul(2))    // twice as fast
 ```
 
-### 3.2 Sequences and Streams
-
-`seq([values]).at(signal)` creates a **Stream**—a sequence driven by a signal:
+**Chords** use nested arrays:
 
 ```javascript
-seq([60, 64, 67]).at(beat)           // C-E-G melody at tempo
-seq([60, 64, 67]).at(beat.mul(2))    // twice as fast
-seq([60, 64, 67]).at(triplet)        // triplet feel
+seq([[60, 64, 67], [65, 69, 72]]).drive(beat)  // C major, F major
 ```
 
-**Chords** use nested arrays—all notes in the inner array trigger simultaneously:
+**Rests** use `_`:
 
 ```javascript
-seq([[60, 64, 67], [65, 69, 72]]).at(beat)  // C major, F major alternating
-seq([60, [64, 67], 72]).at(beat)            // single, chord, single
+seq([60, _, 64, _, 67]).drive(beat)     // notes with rests
 ```
 
-### 3.3 Stream Identity and Lifecycle
+### 2.3 Stream Modifiers
 
-Streams are identified by explicit names via `.as()`:
+Modifiers shape the stream. **Each modifier takes a signal or a function of phase.**
+
+The phase `p` is 0→1 progress through each trigger period. When you pass a function `(p) => ...`, it receives this phase.
 
 ```javascript
-seq([60, 64, 67]).at(beat).as('melody')     // creates/updates stream "melody"
-seq([36, 43]).at(beat.div(2)).as('bass')    // creates/updates stream "bass"
+seq([60, 64, 67]).drive(beat)
+  .vel(0.8)                              // constant velocity
+  .vel(crescendo(60))                    // 60-second crescendo
+  .vel(p => p.mul(Math.PI).sin())        // per-note swell
 
-stop('melody')                               // stops the melody stream
-hush()                                       // stops all streams (panic)
+seq([60, 64, 67]).drive(beat)
+  .gate(p => p.lt(0.3))                  // staccato (30% of period)
+  .gate(p => p.lt(0.95))                 // legato (95% of period)
+
+seq([60, 64, 67]).drive(beat)
+  .bend(p => T.mul(5).sin().mul(0.3))    // vibrato
+  .pressure(p => p.mul(Math.PI).sin())   // bow pressure swell
+  .slide(p => p.mul(0.4).add(0.3))       // slide ramps up
 ```
 
-**Hot reload behavior:** Re-executing code with the same `.as()` name updates the stream in place. The engine:
-1. Diffs the new IR against the running stream
-2. Unchanged nodes keep their state
-3. Changed parameters crossfade over ~50ms
-4. Sends Note Off for any orphaned voices
-
-**Why `.as()` instead of variable names:** JavaScript `const` can't be reassigned, so magic variable-name extraction would require re-evaluating entire code blocks. Explicit `.as()` is clearer, works with any evaluation strategy, and makes stream identity visible in the code.
-
-### 3.4 Stream Modifiers
-
-Chain modifiers to shape the stream:
+**Modifier semantics:** Each call replaces the previous value for that modifier. Compose signals explicitly:
 
 ```javascript
-seq([60, 64, 67]).at(beat)
-  .vel(0.8)                          // constant velocity
-  .vel(T.div(900))                   // 15-minute crescendo
-  .vel(swell.mul(0.3).add(0.5))      // velocity swells per note (via prelude)
+// Velocity = 0.8 × crescendo × swell — compose as a function:
+const myVel = (p) => swell(p).mul(crescendo(60)).mul(0.8)
+seq([60, 64, 67]).drive(beat).vel(myVel)
 
-seq([60, 64, 67]).at(beat)
-  .gate(beat.stacc())                // staccato (via prelude)
-  .gate(beat.legato())               // legato (via prelude)
-  .gate(beat.mod(1).lt(0.8))         // explicit: 80% of trigger period
-
-seq([60, 64, 67]).at(beat)
-  .pressure(swell)                   // MPE pressure per note (via prelude)
-  .slide(0.5)                        // MPE slide (CC74)
-  .bend(vibrato(5, 0.3))             // vibrato via pitch bend (via prelude)
+// Bend = vibrato + offset — compose inline:
+seq([60, 64, 67]).drive(beat).bend(p => vibrato(5, 0.3).add(0.5))
 ```
 
-### 3.5 Rests
+### 2.4 Masks
 
-Use `_` (built-in via prelude) for rests:
+`.mask(signal)` suppresses triggers when the signal is < 0.5:
 
 ```javascript
-seq([60, _, 64, _, 67]).at(beat)     // notes with rests
+seq([60, 64, 67]).drive(beat)
+  .mask(T.div(4).sin().gt(0))        // only when sine > 0
+  .as('gated')
 ```
 
-Note: `0` is MIDI note 0 (C-1), not a rest. Always use `_` for silence.
+### 2.5 Instrument Selection
 
-### 3.6 Multiple Voices
-
-Multiple streams create multiple voices:
+`.inst(name)` selects which instrument plays the stream:
 
 ```javascript
-// Two voices in 3:4 polyrhythm
-const beat = bpm(120)
-seq([48, 55, 48, 52]).at(beat).as('bass')           // 4 notes per cycle
-seq([60, 63, 67]).at(beat.mul(3/4)).as('melody')   // 3 notes per cycle
+seq([60, 64, 67]).drive(beat).inst('piano').as('melody')
+seq([36, 43]).drive(beat).inst('kick').as('drums')
 ```
 
-They stay locked because both derive from `beat`.
+**Built-in instruments:** `'sine'` (default), `'saw'`, `'piano'`, `'kick'`, `'snare'`, `'hihat'`
 
-### 3.7 Note Phase (P)
+If omitted, streams use `'sine'`. For external MIDI instruments, the instrument name is ignored—all streams output to the selected MIDI device.
 
-`P` is the **fractional part of the driver signal**: `P = driver.mod(1)`.
+### 2.6 Stream Identity and Lifecycle
 
-This gives you 0→1 progress through each trigger period, enabling per-note envelopes without needing a separate envelope generator:
+Streams are identified by `.as()`:
 
 ```javascript
-seq([60, 64, 67]).at(beat)
-  .pressure(swell)                // prelude: P.mul(Math.PI).sin()
-  .pressure(P.sin())              // equivalent, explicit
-  .slide(P)                       // slide ramps 0→1 over trigger period
-  .vel(P.lt(0.5).mul(0.3).add(0.5)) // louder in first half
+seq([60, 64, 67]).drive(beat).as('melody')
+seq([36, 43]).drive(beat.div(2)).as('bass')
+
+stop('melody')    // stops the melody stream
+hush()            // stops all streams
 ```
 
-`P` is independent of gate—it tracks position within the trigger period, not note duration. This makes it predictable and trivially computable.
+**Hot reload:** Re-executing code with the same `.as()` name updates the stream smoothly. Changes crossfade over ~50ms. Active notes receive note-off before structural changes.
 
-### 3.8 Phrases as Functions
+---
 
-For reusable patterns, use functions:
+## Part 3: The Standard Prelude
+
+The prelude translates "composer thought" into "signal math." It's visible in the UI.
 
 ```javascript
-const riff = (t) => seq([60, 64, 67, 72]).at(t.mul(4))
+// === Time Units ===
+const bpm = (n) => T.mul(n / 60)
+const hz = (n) => T.mul(n)
 
-riff(beat).as('riff1')              // play at beat rate
-riff(beat.mul(0.5)).as('riff2')     // half speed
-riff(beat.add(0.5)).as('riff3')     // offset by half beat
+// === Per-Note Shapes (functions of phase) ===
+const swell = (p) => p.mul(Math.PI).sin()           // 0→1→0
+const attack = (p) => p.lt(0.1).mul(10).mul(p)      // fast rise
+const release = (p) => p.gt(0.8).mul(p.sub(1).mul(-5))
+
+// === Time-Varying Shapes (use T) ===
+const breath = (period = 8, depth = 0.2) =>
+  T.div(period).sin().mul(depth).add(1)             // 1 ± depth
+
+const vibrato = (rate = 5, depth = 0.3) =>
+  T.mul(rate).sin().mul(depth)                      // oscillates ±depth
+
+const crescendo = (duration) => T.div(duration).min(1)
+const decrescendo = (duration) => T.div(duration).mul(-1).add(1).max(0)
+
+// === Gate Helpers (functions of phase) ===
+const legato = (p) => p.lt(0.95)
+const stacc = (p) => p.lt(0.3)
+const tenuto = (p) => p.lt(0.85)
+
+// === Masks ===
+const onBeat = (driver, n) => driver.mod(n).lt(1)
+const offBeat = (driver) => driver.add(0.5).mod(1).lt(0.5)
+
+// === Rest ===
+const _ = null
+
+// === Default Instruments ===
+// Built-in: 'sine', 'saw', 'piano', 'kick', 'snare', 'hihat'
 ```
 
 ---
 
 ## Part 4: Examples
 
-### Boléro
+### Hello World
+
+```javascript
+// Minimum to hear sound:
+seq([60, 64, 67]).drive(bpm(120)).as('melody')
+```
+
+Uses the default 'sine' instrument. To specify:
+
+```javascript
+seq([60, 64, 67]).drive(bpm(120)).inst('piano').as('melody')
+```
+
+### Boléro (15-minute crescendo)
+
+The composition IS the crescendo. Start there.
 
 ```javascript
 const beat = bpm(72)
-const triplet = beat.mul(1.5)
+const intensity = crescendo(900)  // 15-minute arc governs everything
 
-seq([60,_,_,60,_,_,60,_,_,60,60,60])
-  .at(triplet)
-  .vel(T.div(900))                    // 15-minute crescendo
-  .gate(triplet.stacc())              // short hits
+seq([60, _, _, 60, _, _, 60, _, _, 60, 60, 60])
+  .drive(beat.mul(1.5))
+  .vel(intensity)
+  .gate(stacc)
   .as('snare')
 ```
 
 ### Rubato (Gymnopédie-style)
 
+The piece breathes. Define the breath first.
+
 ```javascript
-const beat = breath(8, 0.2).mul(bpm(66))  // time that breathes
+const breathing = breath(8, 0.15)           // the shape
+const beat = breathing.mul(bpm(66))         // tempo breathes
 
 seq([60, 64, 67, 72, 67, 64])
-  .at(beat)
-  .vel(swell.mul(0.3).add(0.5))
-  .gate(beat.legato())
+  .drive(beat)
+  .vel(p => swell(p).mul(0.3).add(0.5))
+  .gate(legato)
   .as('piano')
 ```
 
 ### Glass Phasing
 
+Two patterns, slightly different speeds.
+
 ```javascript
 const beat = bpm(120)
 
-// Two phrases, slightly different speeds
-seq([60, 64, 67, 64]).at(beat).as('piano1')
-seq([60, 64, 67, 64]).at(beat.mul(1.01)).as('piano2')  // 1% faster → phasing
+seq([60, 64, 67, 64]).drive(beat).as('piano1')
+seq([60, 64, 67, 64]).drive(beat.mul(1.01)).as('piano2')  // 1% faster
 ```
 
 ### 3:4 Polyrhythm
@@ -305,401 +297,236 @@ seq([60, 64, 67, 64]).at(beat.mul(1.01)).as('piano2')  // 1% faster → phasing
 ```javascript
 const beat = bpm(120)
 
-seq([48, 55]).at(beat).as('bass')              // 2 notes per beat
-seq([60, 63, 67]).at(beat.mul(3/2)).as('mel')  // 3 notes per beat
+seq([48, 55]).drive(beat).as('bass')              // 2 notes per beat
+seq([60, 63, 67]).drive(beat.mul(3/2)).as('mel')  // 3 notes per beat
 ```
 
 ### MPE Cello
 
 ```javascript
 const beat = bpm(60)
+const arc = crescendo(20)
 
 seq([36, 43, 48, 55])
-  .at(beat)
-  .vel(crescendo(20).mul(0.6).add(0.3))       // slow crescendo over 20 sec
-  .pressure(swell)                             // bow pressure swell per note
-  .bend(P.gt(0.2).mul(vibrato(5, 0.3)))       // vibrato, delayed onset
-  .slide(P.mul(0.4).add(0.3))                 // slide ramps up per note
+  .drive(beat)
+  .vel(p => arc.mul(0.6).add(0.3))
+  .pressure(swell)
+  .bend(p => p.gt(0.2).mul(vibrato(5, 0.3)))  // delayed vibrato
+  .slide(p => p.mul(0.4).add(0.3))
   .as('cello')
+```
+
+### Sparse Generative
+
+```javascript
+const beat = bpm(90)
+
+seq([60, 63, 67, 70, 72])
+  .drive(beat)
+  .mask(T.div(3).sin().gt(0.3))     // ~60% density
+  .vel(p => p.mul(0.4).add(0.4))
+  .as('sparse')
 ```
 
 ---
 
-## Part 5: Architecture
-
-### 5.1 System Overview
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                           Main Thread                                │
-│  ┌──────────────┐  ┌──────────────┐  ┌────────────────────────────┐ │
-│  │    Editor    │  │ Visualizer   │  │    Graph Constructor       │ │
-│  │   (Monaco)   │  │   (Canvas)   │  │  (Fluent API → IR)         │ │
-│  └──────────────┘  └──────────────┘  └────────────────────────────┘ │
-│         │                 │                      │                   │
-│         │                 │                      │ Serialized IR     │
-│         │                 ▼                      ▼                   │
-│         │    ┌─────────────────────────────────────────────────┐    │
-│         │    │              Prelude (visible)                   │    │
-│         │    │   bpm(), swell, breath(), legato(), stacc()     │    │
-│         │    └─────────────────────────────────────────────────┘    │
-│         │                                        │                   │
-│         │                                        ▼                   │
-│         │                 ┌─────────────────────────────────┐       │
-│         │                 │      MIDI Output Queue          │       │
-│         │                 │   (WebMIDI with timestamps)     │       │
-│         │                 └─────────────────────────────────┘       │
-└─────────┼───────────────────────────┬───────────────────────────────┘
-          │                           │ SharedArrayBuffer
-          │                           │ (Ring Buffer)
-┌─────────┼───────────────────────────┼───────────────────────────────┐
-│         │                    Audio Thread                            │
-│         │               (AudioWorklet + WASM)                       │
-│  ┌──────┼─────────────────────────────────────────────────────────┐ │
-│  │      ▼              Signal Evaluator (Rust/WASM)               │ │
-│  │  • Evaluates signal graph at control rate (250-1000 Hz)        │ │
-│  │  • Detects integer crossings (note triggers)                   │ │
-│  │  • Warns on non-monotonic drivers                              │ │
-│  │  • Manages voice allocation (MPE channels 2-16)                │ │
-│  │  • Writes MIDI messages to output ring buffer                  │ │
-│  │  • Generates audio samples for internal synths                 │ │
-│  └────────────────────────────────────────────────────────────────┘ │
-└─────────────────────────────────────────────────────────────────────┘
-```
-
-### 5.2 The Intermediate Representation
-
-The fluent API compiles to a minimal IR:
-
-```typescript
-type SignalIR =
-  | { op: 'const', value: number }
-  | { op: 'time' }                                    // T
-  | { op: 'phase' }                                   // P = driver.mod(1)
-  | { op: 'add', a: SignalIR, b: SignalIR }
-  | { op: 'mul', a: SignalIR, b: SignalIR }
-  | { op: 'div', a: SignalIR, b: SignalIR }
-  | { op: 'mod', a: SignalIR, b: SignalIR }
-  | { op: 'sin', a: SignalIR }
-  | { op: 'floor', a: SignalIR }
-  | { op: 'lt', a: SignalIR, b: SignalIR }
-  | { op: 'gt', a: SignalIR, b: SignalIR }
-
-type NoteValue = number | number[] | null    // single note, chord, or rest
-
-type StreamIR = {
-  id: string                   // from .as('name')
-  sequence: NoteValue[]        // values (MIDI notes, chords, or rests)
-  driver: SignalIR             // the .at() signal
-  velocity?: SignalIR
-  gate?: SignalIR
-  pressure?: SignalIR
-  slide?: SignalIR
-  bend?: SignalIR
-  allowNonMonotonic?: boolean  // opt-in for scrubbing/phasing
-}
-```
-
-**Design principle:** The Rust engine stays dumb. All musical logic lives in TypeScript. The prelude is pure JavaScript sugar over the kernel primitives.
-
-### 5.3 Signal Evaluator (Rust/WASM)
-
-Runs in an AudioWorklet for timing stability. Core loop:
-
-```rust
-fn evaluate_tick(&mut self, wall_time: f64) {
-    // Evaluate all signals at current time
-    for node in &self.nodes {
-        self.values[node.id] = self.eval_node(node, wall_time);
-    }
-
-    // Check for integer crossings on each stream's driver
-    for stream in &mut self.streams {
-        let prev = stream.prev_driver_value;
-        let curr = self.values[stream.driver_node];
-
-        // Monotonicity warning
-        if curr < prev && !stream.allow_non_monotonic {
-            self.warn_non_monotonic(stream.id, prev, curr);
-        }
-
-        if curr.floor() > prev.floor() {
-            // Trigger! Emit note-on with interpolated timestamp
-            let crossing_time = interpolate_crossing(prev, curr, ...);
-            self.emit_note_on(stream, crossing_time);
-        }
-
-        stream.prev_driver_value = curr;
-    }
-}
-```
-
-### 5.4 Monotonicity Safety
-
-Non-monotonic driver signals (where the value decreases) can cause unexpected retriggering. The engine provides safety rails:
-
-```javascript
-// Default: warns in console when driver decreases
-seq([60, 64, 67]).at(wobblySignal).as('melody')
-// Console: "Stream 'melody': driver decreased (2.3 → 2.1). This may cause unexpected retriggering."
-
-// Opt-in for intentional non-monotonic use (scrubbing, phasing effects)
-seq([60, 64, 67]).at(wobblySignal).allowNonMonotonic().as('scrub')
-```
-
-This catches footguns without preventing advanced use cases.
-
-### 5.5 Integration Precision
-
-For long pieces (Boléro = 15 minutes), use Kahan summation to avoid floating-point drift:
-
-```rust
-struct Integrator {
-    sum: f64,
-    compensation: f64,
-}
-
-impl Integrator {
-    fn add(&mut self, value: f64) -> f64 {
-        let y = value - self.compensation;
-        let t = self.sum + y;
-        self.compensation = (t - self.sum) - y;
-        self.sum = t;
-        self.sum
-    }
-}
-```
-
-### 5.6 MIDI/MPE Output
+## Part 5: MIDI/MPE Output
 
 Each stream maps to an MPE voice:
 
 | Stream property | MIDI output |
 |-----------------|-------------|
 | sequence value | Note On (channel N) |
-| `.vel()` | Note velocity |
+| `.vel()` | Note velocity (0-127) |
 | `.gate()` | Note duration (off when gate < 0.5) |
-| `.pressure()` | Channel Pressure |
-| `.slide()` | CC74 |
+| `.pressure()` | Channel Pressure (0-127) |
+| `.slide()` | CC74 (0-127) |
 | `.bend()` | Pitch Bend (14-bit) |
 
-**Voice allocation:** Round-robin through MPE channels 2-16. If all 15 are busy, steal the oldest voice.
+**Voice allocation:** Lower zone, channels 2-16, round-robin. Oldest voice stolen when full.
 
-### 5.7 Timing and MPE Defaults
-
-| Parameter | Default | Notes |
-|-----------|---------|-------|
-| Control rate | 500 Hz | Signal evaluation frequency |
-| Lookahead | 50 ms | MIDI scheduling buffer |
-| Jitter target | <2 ms | Note timing accuracy |
-| MPE pitch bend range | ±48 semitones | Per MPE spec default |
-| MPE zone | Lower zone, channels 2-16 | Master channel 1 |
-| Gate threshold | 0.5 | Note-off when gate crosses below |
-| Default gate | `driver.mod(1).lt(0.9)` | 90% of trigger period |
-
-### 5.8 Hot Reload
-
-When code changes:
-
-1. Compile new IR
-2. Match streams by `.as()` name
-3. Diff against current IR
-4. Patch running graph:
-   - Unchanged nodes: keep state
-   - Changed parameters: update in place
-   - Structural changes: crossfade over ~50ms
-   - Removed streams: send Note Off for active voices
+**Bend range:** ±48 semitones (MPE default). Global config via `canyons.bendRange = 12`.
 
 ---
 
 ## Part 6: Visualization
 
-### 6.1 The Integer Crossing Display
-
-The visualizer is **not optional**—it's how users understand why rubato works.
+The integer-crossing display is **essential**—it's how users understand why rubato works.
 
 ```
-                    Integer Crossings
-    ─────────────────────────────────────────────
-    3.0 ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─●─ ─ ─ ─ ─
-                                    /
-    2.0 ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─●─ ─ ─/─ ─ ─ ─ ─ ─
-                            /    /
-    1.0 ─ ─ ─ ─ ─ ─●─ ─ ─ ─/─ ─/─ ─ ─ ─ ─ ─ ─ ─
-                  /      /  /
-    0.0 ════════/══════/══/════════════════════
+                Integer Crossings
+─────────────────────────────────────────────
+3.0 ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─●─ ─ ─ ─ ─
+                                /
+2.0 ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─●─ ─ ─/─ ─ ─ ─ ─ ─
+                        /    /
+1.0 ─ ─ ─ ─ ─ ─●─ ─ ─ ─/─ ─/─ ─ ─ ─ ─ ─ ─ ─
               /      /  /
-            ───────────────────────────────────▶
-                        Time
+0.0 ════════/══════/══/════════════════════
+          ───────────────────────────────▶
+                    Time
 
-    ● = trigger (integer crossing)
-    Curve = driver signal value
-    Slope = tempo (steeper = faster)
+● = trigger (integer crossing)
+Slope = tempo (steeper = faster)
 ```
 
-**Required elements:**
-1. **Horizontal grid lines** at integers (1.0, 2.0, 3.0...)
-2. **The driver signal curve** moving through time
-3. **Trigger markers** (●) where curve crosses integer lines
-4. **Playhead** showing current time position
-5. **Per-stream visualization** (multiple curves if multiple streams)
-
-**Why this matters:** A flatter slope = slower tempo = triggers further apart. Users see rubato as literally "stretching the curve." This single visualization replaces pages of documentation.
-
-### 6.2 Waveform Overlays
-
-Optionally show continuous modulation signals:
-
-```
-    Velocity ───────────────────────────
-    1.0 ┤                          ╱
-        │                        ╱
-    0.5 ┤                      ╱
-        │                    ╱
-    0.0 ┤══════════════════╱
-        └──────────────────────────────▶
-                    Time (15 min crescendo)
-```
+**v0.8 scope:** Read-only strip chart with playhead. Interactive scrubbing deferred.
 
 ---
 
 ## Part 7: Open Questions
 
-### 7.1 What Determines Note Duration?
+### 7.1 The Reset Problem
 
-Gate signal controls note lifetime:
-- Note-on fires when driver crosses an integer (forward only—non-monotonic signals warn by default)
-- Note-off fires when gate crosses 0.5 downward
-
-Default gate if not specified: `driver.mod(1).lt(0.9)` (90% of each trigger period).
-
-`P` (note phase) is simply `driver.mod(1)`—the fractional part of the driver. It does not depend on gate. This makes `P` trivially computable without needing to predict when gate will close.
-
-### 7.2 Should `T` Be Wall Time or Musical Time?
-
-Currently `T` is wall time (seconds). Musical time derives from it:
+If two streams drift apart (polyrhythm) and you want to re-sync:
 
 ```javascript
-const beat = bpm(120)  // derive beat from T
+seq(A).drive(beat1).as('a')
+seq(B).drive(beat2).as('b')
+// They're drifting... how to re-sync?
 ```
 
-Alternative: `T` could be "beats" with a global tempo. But this hides the relationship and loses the signal-first clarity.
+Current answer: Everything derives from `T`, so streams stay phase-coherent if they share ancestors. True independence means true drift.
 
-### 7.3 Structure and Sections (Future)
+Possible addition: `sync()` function that snaps a signal to the nearest integer.
 
-The kernel handles one continuous idea. A-B-A form, section transitions, and conditional routing are deferred to a future version. Possible directions:
+### 7.2 Counting / Stateful Logic
+
+"Play this motif 4 times, then stop" requires counting crossings:
 
 ```javascript
-// Future: conditional routing based on signals
-const section = T.div(32).floor().mod(3)  // 0, 1, 2, 0, 1, 2...
-// ...some way to route to different sequences based on section
+// Possible addition:
+const n = count(beat)  // how many integers has beat crossed?
+seq([60, 64, 67]).drive(beat).mask(n.lt(12)).as('intro')  // 12 notes then silence
 ```
 
-This is composition sugar for v0.5+, not v0.
+Deferred pending real-world usage.
+
+### 7.3 Hysteresis at Integer Boundaries
+
+When a signal hovers near an integer (e.g., 0.999 → 1.001 → 0.998), naive floor() could double-trigger. Implementation must latch: once an integer is crossed, it can't trigger again until the signal moves away and returns.
+
+### 7.4 Absolute Duration
+
+Currently, gate is relative to trigger period. For absolute duration ("this note lasts 2 seconds"):
+
+```javascript
+// Possible addition:
+.hold(2)  // 2 seconds absolute
+```
+
+Deferred pending real-world usage.
+
+### 7.5 Randomness
+
+Probabilistic masks need a noise primitive:
+
+```javascript
+// Possible addition:
+noise              // 0-1 random, sample-and-hold per tick
+noise.gt(0.3)      // 70% probability mask
+```
 
 ---
 
-## Part 8: Success Criteria
+## Part 8: Implementation Plan
 
-1. **Boléro:** 15-minute crescendo + triplet rhythm in <5 lines
-2. **Rubato:** Breathing tempo via `breath(8, 0.2).mul(bpm(66))`
-3. **Polyrhythm:** 3:4 relationship expressed as `beat.mul(3/2)`
-4. **MPE:** Per-note pressure/slide/bend working with external instruments
-5. **Hot reload:** Change tempo mid-performance without glitch
-6. **Latency:** <2ms jitter on note triggers
-7. **Comprehension:** User understands rubato within 30 seconds of seeing the integer-crossing visualization
+### Phase 0: HTML Prototype (Do This First)
+
+Build a single HTML file that:
+- Runs `setInterval` at 50ms (20Hz)
+- Evaluates a hardcoded signal graph
+- Console logs "NOTE ON 60" on integer crossings
+- Uses Web Audio oscillator to make sound
+
+**Goal:** Validate integer-crossing logic handles hysteresis correctly before building infrastructure.
+
+### Phase 1: TypeScript Core
+
+Pure TypeScript, no Rust/WASM. The math is cheap.
+
+- Signal proxy that builds expression trees
+- `seq().drive()` returning Stream
+- Stream modifiers (`.vel()`, `.gate()`, etc.)
+- Evaluation at 500Hz in AudioWorklet
+- Integer crossing detection with latching
+- WebMIDI output
+
+### Phase 2: Sound & Prelude
+
+- Built-in instruments: sine, saw, piano, drums
+- Standard prelude loaded by default
+- Prelude visible/editable in UI
+
+### Phase 3: Editor & Visualization
+
+- Monaco editor with live reload
+- Read-only integer-crossing visualizer
+- Playhead showing current time
+- Error display (preserve last good state)
+
+### Phase 4: Polish
+
+- MPE voice allocation
+- Hot reload crossfading
+- Signal notebook (solo any signal)
+- Interactive scrubbing
+
+### Deferred (v0.9+)
+
+- Rust/WASM engine (only if JS bottlenecks)
+- `count()` for stateful logic
+- `noise` for randomness
+- `hold()` for absolute duration
+- WASM synth modules
 
 ---
 
-## Part 9: What We're NOT Building (Yet)
+## Part 9: Success Criteria
+
+1. **Hello World:** `seq([60,64,67]).drive(bpm(120)).as('x')` produces sound
+2. **Boléro:** 15-minute crescendo in <6 lines
+3. **Rubato:** Breathing tempo via `breath(8).mul(bpm(66))`
+4. **Polyrhythm:** 3:4 as `beat.mul(3/2)`
+5. **MPE:** Per-note pressure/slide/bend with external instruments
+6. **Hot reload:** Change tempo mid-performance without glitch
+7. **Comprehension:** User understands rubato in 30 seconds of seeing visualization
+
+---
+
+## Appendix: What We're NOT Building (Yet)
 
 - Mini-notation parsing
-- Phrase containers or nesting constructs
 - Multiple time contexts / scopes
-- Built-in scales, chords, or music theory helpers
-- Section/form routing (A-B-A, verse-chorus)
-- Randomness/noise primitives
+- Built-in scales, chords, music theory
+- Section routing (A-B-A, verse-chorus)
+- Polyphonic overlap within streams
 
-All of that is sugar. Build the kernel first. Add sugar when the pain reveals what's needed.
-
----
-
-## Appendix A: Implementation Phases
-
-### Phase 1: Signal Engine
-- `T` and `P` proxies that build IR
-- Signal operations (`.mul()`, `.div()`, `.add()`, `.mod()`, `.sin()`, `.floor()`, `.lt()`, `.gt()`)
-- `seq([]).at()` returning Stream
-- Stream modifiers (`.vel()`, `.gate()`, `.pressure()`, `.slide()`, `.bend()`)
-- Stream identity via `.as()`
-- `stop()` and `hush()`
-- Simple web REPL for testing
-
-### Phase 2: Standard Prelude
-- `bpm()`, `hz()` time units
-- `swell`, `breath()`, `vibrato()` shapes
-- `.legato()`, `.stacc()`, `.tenuto()` articulation
-- Global `_` for rests
-- Visible/editable prelude panel in UI
-
-### Phase 3: Audio Thread
-- Rust/WASM signal evaluator
-- AudioWorklet integration
-- Integer crossing detection with monotonicity warnings
-- Control rate evaluation
-
-### Phase 4: MIDI Output
-- WebMIDI integration
-- MPE voice allocation
-- Lookahead scheduling
-- Timestamp precision
-
-### Phase 5: Visualization
-- Integer crossing display (THE critical feature)
-- Driver signal curves
-- Playhead overlay
-- Trigger markers
-- Per-stream views
-
-### Phase 6: Hot Reload
-- IR diffing by stream name
-- State preservation
-- Crossfade on structural changes
-- Error recovery
+All of that is sugar or extension. Build the kernel first.
 
 ---
 
-## Appendix B: Prelude Reference
+## Changelog
 
-The complete standard prelude (loaded by default, visible in UI):
+### v0.8 (January 2025)
 
-```javascript
-// === Time Units ===
-const bpm = (n) => T.mul(n / 60)
-const hz = (n) => T.mul(n)
+- **Simplified:** Removed magic `P` global; all phase access via explicit `(p) => ...` functions
+- **Simplified:** Modifiers replace rather than stack; compose signals explicitly
+- **Simplified:** Hot reload behavior reduced to one sentence
+- **Simplified:** Removed `.nonMonotonic()` from core API
+- **Simplified:** Removed per-stream MPE config; global defaults only
+- **Moved:** IR type definitions and architecture diagrams to implementation docs
+- **Added:** Real hello world with sound
+- **Added:** `.inst()` for instrument selection
+- **Added:** Default instrument kit
+- **Added:** Open questions for Reset, Counting, Hysteresis
+- **Added:** Implementation plan starting with HTML prototype
+- **Added:** "Library, not DSL" design philosophy
+- **Reordered:** API documentation now before Prelude (learn the primitives first)
 
-// === Per-Note Shapes (use P) ===
-const swell = P.mul(Math.PI).sin()
-const attack = P.lt(0.1).mul(10).mul(P)
-const release = P.gt(0.8).mul(1 - P).mul(5)
+### v0.7 (January 2025)
 
-// === Time-Varying Shapes (use T) ===
-const breath = (period = 8, depth = 0.2) =>
-  T.add(T.div(period).sin().mul(depth))
-
-const vibrato = (rate = 5, depth = 0.3) =>
-  T.mul(rate).sin().mul(depth)
-
-const crescendo = (duration) => T.div(duration)
-
-// === Articulation (gate helpers) ===
-Signal.prototype.legato = function() { return this.mod(1).lt(0.95) }
-Signal.prototype.stacc = function() { return this.mod(1).lt(0.3) }
-Signal.prototype.tenuto = function() { return this.mod(1).lt(0.85) }
-
-// === Rest ===
-const _ = null
-```
+- Initial public spec
 
 ---
 
