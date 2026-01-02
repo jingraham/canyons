@@ -10,7 +10,7 @@ import type { StreamState } from './stream';
 const app = document.getElementById('app')!;
 app.innerHTML = `
   <div class="header">
-    <h1><span>canyons</span> — phase 1</h1>
+    <h1><span>canyons</span> — glass machine</h1>
     <div class="controls">
       <button id="startBtn">Start</button>
       <button id="stopBtn">Stop</button>
@@ -272,22 +272,38 @@ midi.init().then((success) => {
   }
 });
 
-// --- Demo Streams ---
+// --- Demo: Glass Machine ---
+// A Philip Glass-inspired ostinato with breathing tempo and dynamics.
+// The key to Glass: SAME pattern, slight phase drift between voices.
 
-// Rubato: tempo breathes
-const breathing = breath(4, 0.25);
-const rubatoTempo = breathing.mul(bpm(80));
-seq([60, 62, 64, 65, 67, 65, 64, 62]).drive(rubatoTempo).as('rubato');
+// Subtle breath — barely perceptible ±1% variation
+const breathing = breath(12, 0.01);
 
-// Polyrhythm: 3 against 4
-const baseTempo = bpm(90);
-seq([48, 52, 55]).drive(baseTempo).as('three');
-seq([60, 63, 65, 67]).drive(baseTempo.mul(4 / 3)).as('four');
+// Base tempo: 180 BPM with gentle breathing
+const pulse = breathing.mul(bpm(180));
 
-// Crescendo over 30 seconds
-seq([36, 36, 43, 43]).drive(bpm(60)).vel(crescendo(30)).as('swell');
+// Dynamic arc: starts soft, swells over 60 seconds
+const arc = crescendo(60).mul(0.4).add(0.4);
 
-console.log('canyons Phase 1');
-console.log('===============');
-console.log('TypeScript core initialized.');
+// === The Arpeggio ===
+// A simple rising/falling figure in A minor — the "cell"
+// This is the SAME pattern in all voices, just phased
+
+const cell = [
+  57, 60, 64, 67,  // A C E G (Am7 rising)
+  64, 60, 57, 60,  // E C A C (falling back)
+];
+
+// Voice 1: The main arpeggio
+seq(cell).drive(pulse).vel(arc).as('arp1');
+
+// Voice 2: Same pattern, 1.5% faster — creates the Glass phasing effect
+seq(cell).drive(pulse.mul(1.015)).vel(arc.mul(0.8)).as('arp2');
+
+// Voice 3: Bass — root notes, one per cell cycle (8 notes = 1 bass note)
+seq([45, 45, 48, 45]).drive(pulse.mul(1/8)).vel(arc.mul(0.7)).as('bass');
+
+console.log('canyons Phase 1 — Glass Machine');
+console.log('================================');
+console.log('Two arpeggios phasing against each other.');
 console.log('Click Start to begin.');
