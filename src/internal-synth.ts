@@ -29,9 +29,21 @@ function midiToFreq(midi: number): number {
   return 440 * Math.pow(2, (midi - 69) / 12);
 }
 
+/** Create a soft saturation curve for analog warmth */
+function createSaturationCurve(amount: number = 0.7): Float32Array<ArrayBuffer> {
+  const samples = 256;
+  const curve = new Float32Array(samples);
+  for (let i = 0; i < samples; i++) {
+    const x = (i * 2) / samples - 1; // -1 to 1
+    // Soft clipping with tanh-like curve
+    curve[i] = Math.tanh(x * (1 + amount * 2)) * (1 - amount * 0.1);
+  }
+  return curve as Float32Array<ArrayBuffer>;
+}
+
 /**
  * Create an internal voice with Web Audio nodes.
- * All voices have: oscillator → filter → gain → destination
+ * Signal chain: oscillator → filter → saturator → gain → destination
  * This gives us continuous control over pitch, timbre, and amplitude.
  */
 function createVoice(
@@ -48,6 +60,7 @@ function createVoice(
   // Create audio nodes
   const osc = ctx.createOscillator();
   const filter = ctx.createBiquadFilter();
+  const saturator = ctx.createWaveShaper();
   const gain = ctx.createGain();
 
   // Configure oscillator based on instrument
@@ -76,13 +89,19 @@ function createVoice(
   filter.frequency.value = baseCutoff;
   filter.Q.value = 1; // Resonance, modulated by slide
 
+  // Saturation for analog warmth (more for saw/square)
+  const satAmount = (instrument === 'saw' || instrument === 'square') ? 0.8 : 0.4;
+  saturator.curve = createSaturationCurve(satAmount);
+  saturator.oversample = '2x'; // Reduce aliasing
+
   // Gain envelope
-  const vol = velocity * 0.3;
+  const vol = velocity * 0.35;
   gain.gain.setValueAtTime(vol, ctx.currentTime);
 
-  // Connect: osc → filter → gain → destination
+  // Connect: osc → filter → saturator → gain → destination
   osc.connect(filter);
-  filter.connect(gain);
+  filter.connect(saturator);
+  saturator.connect(gain);
   gain.connect(ctx.destination);
 
   osc.start();
@@ -133,6 +152,7 @@ function createVoice(
         osc.stop();
         osc.disconnect();
         filter.disconnect();
+        saturator.disconnect();
         gain.disconnect();
       }, 150);
     },

@@ -54,55 +54,64 @@ seq([45, 45, 48, 45]).drive(pulse.mul(1/8)).vel(arc.mul(0.7)).inst('pluckBass').
   acid: {
     name: 'Acid Rain',
     code: `// === Acid Rain ===
-// 303-inspired acid with continuous filter modulation via MPE.
+// Relentless 303 acid with aggressive filter modulation.
 // pressure() → filter cutoff, slide() → resonance
 
-// Driving tempo
 const beat = bpm(138);
+const sixteenth = beat.mul(4);  // 16th note driver
 
 // === Filter Modulation ===
-// Slow filter sweep: opens over 2 bars, closes over 2 bars
-const filterLFO = T.div(8).mod(1);              // 0→1 over 2 bars
-const filterEnv = filterLFO.mul(2).sub(1).abs(); // triangle 0→1→0
+// Bar-synced ramp: opens on downbeat, closes toward end of bar
+const barPhase = beat.mod(4).div(4);           // 0→1 over 1 bar
+const barRamp = barPhase.mul(-1).add(1);       // 1→0 (closes through bar)
 
-// Per-note filter envelope: opens quickly, closes slowly (phase-based)
-const noteFilter = swell;  // 0→1→0 within each note
+// Smoothed step: jumps up every 4 bars, decays down
+const fourBar = beat.div(16).mod(1);           // 0→1 over 4 bars
+const stepped = fourBar.mul(4).floor().div(4); // 0, 0.25, 0.5, 0.75 steps
 
-// Resonance pulses on accented notes
-const accent = onBeat(beat, 4);
-const rez = accent.mul(0.6).add(0.2);
+// Combined: stepped base + per-bar shape
+const filterMod = p => stepped.mul(0.5).add(barRamp.mul(0.4)).add(0.1);
+
+// Resonance: peaks mid-bar for that squelchy accent
+const rezCurve = barPhase.mul(2).sub(1).abs().mul(-1).add(1);  // peak at 0.5
+const rez = rezCurve.mul(0.6).add(0.3);  // 0.3 to 0.9
 
 // === The 303 Line ===
-// Classic acid pattern: syncopated, chromatic slides
+// Minor pentatonic: C Eb F G Bb (C2 range)
+// C2=36, Eb2=39, F2=41, G2=43, Bb2=46
 const bassline = [
-  36, _, 36, 48,  // root, rest, root, octave
-  _, 38, _, 36,   // rest, minor 2nd, rest, root
-  39, _, 36, _,   // minor 3rd, rest, root, rest
-  48, 47, 45, 43, // descending chromatic
+  36, 36, 36, 39,  // root × 3, minor 3rd
+  36, 36, 41, 39,  // root × 2, 4th, minor 3rd
+  36, 43, 41, 39,  // root, 5th, 4th, minor 3rd
+  46, 43, 39, 37,  // flat 7, 5th, minor 3rd, chromatic tension
 ];
 
 seq(bassline)
-  .drive(beat.mul(2))  // 16th notes
-  .vel(p => accent.mul(0.3).add(0.6))
-  .gate(p => p.lt(0.7))  // slightly staccato
-  .pressure(p => noteFilter(p).mul(filterEnv).mul(0.8).add(0.1))  // filter cutoff!
-  .slide(p => rez)  // resonance!
+  .drive(sixteenth)
+  .vel(p => attack(p).mul(0.3).add(0.6))
+  .gate(p => p.lt(0.65))
+  .pressure(filterMod)
+  .slide(p => rez.add(swell(p).mul(0.3)))  // extra resonance swell per note
   .inst('saw')
   .as('acid');
 
 // === Kick ===
-// Four-on-the-floor
+// Hard-hitting four-on-the-floor
 seq([36, 36, 36, 36])
   .drive(beat)
-  .vel(0.9)
+  .vel(1.0)
   .inst('kick')
   .as('kick');
 
 // === Hi-hats ===
-// Off-beat open hats
-seq([_, 42, _, 42])
-  .drive(beat)
-  .vel(p => offBeat(beat).mul(0.5).add(0.3))
+// 16th notes with flowing groove velocity
+// Emphasize 1, 5, 9, 13 (downbeats) and ghost the others
+const hatGroove = sixteenth.mod(4).div(4);  // 0, 0.25, 0.5, 0.75 pattern
+const hatVel = p => hatGroove.mul(-0.4).add(0.7).add(swell(p).mul(0.2));
+
+seq([42, 42, 42, 42, 42, 42, 42, 42])
+  .drive(sixteenth)
+  .vel(hatVel)
   .gate(stacc)
   .inst('hihat')
   .as('hats');
@@ -111,7 +120,7 @@ seq([_, 42, _, 42])
 // On 2 and 4
 seq([_, 39, _, 39])
   .drive(beat)
-  .vel(0.7)
+  .vel(0.8)
   .inst('snare')
   .as('clap');
 `,
