@@ -137,10 +137,10 @@ export class Stream {
     // Check mask
     const masked = this._mask ? this._mask.eval(t) < 0.5 : false;
 
-    // Integer crossing detection with hysteresis
-    // Trigger fires when floor INCREASES (not on decrease)
+    // Integer crossing detection
+    // Trigger fires when floor changes (forward or backward for scrubbing)
     let trigger = false;
-    if (this._lastFloor !== null && currentFloor > this._lastFloor && !masked) {
+    if (this._lastFloor !== null && currentFloor !== this._lastFloor && !masked) {
       trigger = true;
       this._noteOnTime = t;
     }

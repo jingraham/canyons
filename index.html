@@ -43,46 +43,150 @@
       color: var(--text-primary);
       height: 100vh;
       overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* === Top Menu Bar === */
+    .menu-bar {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 8px 16px;
+      background: var(--bg-surface);
+      border-bottom: 1px solid var(--bg-elevated);
+      flex-shrink: 0;
+    }
+
+    .menu-bar .logo {
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-muted);
+      letter-spacing: 1px;
+      margin-right: 8px;
+    }
+
+    .menu-bar .divider {
+      width: 1px;
+      height: 20px;
+      background: var(--bg-elevated);
+    }
+
+    /* Transport controls */
+    .transport {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .transport-btn {
+      width: 28px;
+      height: 28px;
+      background: transparent;
+      border: none;
+      color: var(--text-dim);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: color 0.15s;
+      padding: 0;
+    }
+    .transport-btn:hover { color: var(--text-primary); }
+    .transport-btn.active { color: var(--accent); }
+    .transport-btn svg {
+      width: 16px;
+      height: 16px;
+      fill: currentColor;
+    }
+
+    /* Time scrubber */
+    .scrubber {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex: 1;
+      max-width: 300px;
+    }
+
+    .scrubber .time {
+      font-size: 11px;
+      font-variant-numeric: tabular-nums;
+      color: var(--accent);
+      min-width: 48px;
+    }
+
+    .scrubber input[type="range"] {
+      flex: 1;
+      -webkit-appearance: none;
+      appearance: none;
+      height: 4px;
+      background: var(--bg-elevated);
+      border-radius: 2px;
+      cursor: pointer;
+    }
+    .scrubber input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 12px;
+      height: 12px;
+      background: var(--accent);
+      border-radius: 50%;
+      cursor: pointer;
+    }
+    .scrubber input[type="range"]::-moz-range-thumb {
+      width: 12px;
+      height: 12px;
+      background: var(--accent);
+      border-radius: 50%;
+      cursor: pointer;
+      border: none;
+    }
+
+    /* Dropdowns */
+    .menu-select {
+      background: transparent;
+      border: 1px solid var(--text-dim);
+      color: var(--text-muted);
+      padding: 4px 8px;
+      font-family: inherit;
+      font-size: 10px;
+      cursor: pointer;
+      min-width: 100px;
+    }
+    .menu-select:hover {
+      border-color: var(--text-muted);
+      color: var(--text-primary);
+    }
+    .menu-select option { background: var(--bg-elevated); }
+
+    .status-indicator {
+      font-size: 10px;
+      color: var(--text-dim);
+      margin-left: auto;
+    }
+    .status-indicator.ok { color: var(--accent); }
+    .status-indicator.error { color: var(--error); }
+
+    /* === Main Layout === */
+    #app {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      min-height: 0;
     }
 
     .layout {
       display: flex;
-      height: 100vh;
+      flex: 1;
+      min-height: 0;
     }
 
     .editor-panel {
       width: 60%;
       display: flex;
       flex-direction: column;
-    }
-
-    .editor-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 12px 20px;
-    }
-
-    .editor-header .title {
-      font-size: 13px;
-      font-weight: 500;
-      color: var(--text-muted);
-      letter-spacing: 0.5px;
-    }
-
-    .editor-header .status {
-      font-size: 10px;
-      padding: 3px 8px;
-      color: var(--text-dim);
-      letter-spacing: 0.5px;
-    }
-
-    .editor-header .status.ok {
-      color: var(--accent);
-    }
-
-    .editor-header .status.error {
-      color: var(--error);
+      min-height: 0; /* Allow flex children to scroll */
+      background: var(--bg-deep);
     }
 
     .prelude {
@@ -91,10 +195,11 @@
     }
 
     .prelude summary {
-      padding: 8px 20px;
+      padding: 6px 16px;
       cursor: pointer;
       color: var(--text-dim);
       letter-spacing: 1px;
+      font-size: 10px;
     }
 
     .prelude summary:hover {
@@ -103,25 +208,27 @@
 
     .prelude pre {
       margin: 0;
-      padding: 0 20px 12px 20px;
+      padding: 0 16px 10px 16px;
       color: var(--text-muted);
       line-height: 1.5;
       overflow-x: auto;
       font-family: inherit;
+      font-size: 10px;
     }
 
     #editor {
       flex: 1;
+      min-height: 0;
       overflow: hidden;
     }
 
     .error-panel {
       display: none;
-      padding: 10px 20px;
+      padding: 8px 16px;
       background: var(--error-bg);
       color: var(--error);
-      font-size: 12px;
-      max-height: 100px;
+      font-size: 11px;
+      max-height: 80px;
       overflow-y: auto;
     }
 
@@ -131,83 +238,27 @@
 
     .viz-panel {
       width: 40%;
-      padding: 20px;
+      padding: 16px;
       overflow-y: auto;
       background: var(--bg-surface);
     }
 
-    h1 {
-      font-size: 13px;
-      font-weight: normal;
-      color: var(--text-dim);
-    }
-    h1 span { color: var(--text-muted); }
-
-    .controls {
-      display: flex;
-      gap: 8px;
-      margin-bottom: 20px;
-    }
-
-    button, select {
-      background: transparent;
-      border: 1px solid var(--text-dim);
-      color: var(--text-muted);
-      padding: 6px 14px;
-      cursor: pointer;
-      font-family: inherit;
-      font-size: 11px;
-      transition: all 0.15s;
-    }
-    button:hover, select:hover {
-      border-color: var(--text-muted);
-      color: var(--text-primary);
-    }
-    button.active {
-      border-color: var(--accent);
-      color: var(--accent);
-    }
-    select { min-width: 150px; }
-    select option { background: var(--bg-elevated); }
-
-    .time-display {
-      margin-bottom: 24px;
-    }
-    .time-display .label {
-      font-size: 10px;
-      color: var(--text-dim);
-      text-transform: uppercase;
-      letter-spacing: 1.5px;
-      margin-bottom: 4px;
-    }
-    .time-display .value {
-      font-size: 28px;
-      font-weight: 300;
-      color: var(--accent);
-      font-variant-numeric: tabular-nums;
-    }
-    .time-display .floor {
-      font-size: 12px;
-      color: var(--text-dim);
-      margin-top: 2px;
-    }
-
     canvas {
       width: 100%;
-      height: 160px;
+      height: 140px;
       background: transparent;
-      margin-bottom: 24px;
+      margin-bottom: 16px;
     }
 
     .streams {
       display: flex;
-      gap: 24px;
+      gap: 16px;
       flex-wrap: wrap;
-      margin-bottom: 24px;
+      margin-bottom: 16px;
     }
 
     .stream-viz {
-      min-width: 240px;
+      min-width: 200px;
       flex: 1;
     }
     .stream-viz h2 {
@@ -216,25 +267,25 @@
       color: var(--text-dim);
       text-transform: uppercase;
       letter-spacing: 1.5px;
-      margin-bottom: 8px;
+      margin-bottom: 6px;
     }
     .stream-notes {
       display: flex;
-      gap: 3px;
-      margin-bottom: 8px;
+      gap: 2px;
+      margin-bottom: 6px;
       flex-wrap: wrap;
     }
     .note-cell {
-      min-width: 28px;
-      height: 24px;
+      min-width: 24px;
+      height: 20px;
       background: transparent;
       border: 1px solid var(--text-dim);
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 10px;
+      font-size: 9px;
       color: var(--text-muted);
-      padding: 0 5px;
+      padding: 0 4px;
       transition: all 0.1s;
     }
     .note-cell.active {
@@ -247,13 +298,13 @@
       color: var(--text-dim);
     }
     .stream-info {
-      font-size: 10px;
+      font-size: 9px;
       color: var(--text-dim);
     }
     .stream-info span { color: var(--accent); }
 
     .log {
-      max-height: 200px;
+      max-height: 160px;
       overflow-y: auto;
     }
     .log-header {
@@ -261,17 +312,17 @@
       color: var(--text-dim);
       text-transform: uppercase;
       letter-spacing: 1.5px;
-      margin-bottom: 8px;
+      margin-bottom: 6px;
     }
     .log-entry {
       color: var(--text-muted);
-      line-height: 1.6;
-      font-size: 10px;
+      line-height: 1.5;
+      font-size: 9px;
     }
     .log-entry.trigger { color: var(--accent); }
     .log-entry .time {
       color: var(--text-dim);
-      margin-right: 10px;
+      margin-right: 8px;
     }
 
   </style>

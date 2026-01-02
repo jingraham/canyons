@@ -78,6 +78,10 @@ class Engine {
   private workletReady = false;
   private useWorklet = true;
 
+  // Time offset for seeking (worklet time + offset = actual time)
+  private timeOffset = 0;
+  private lastWorkletTime = 0;
+
   // Track active notes per stream for gate handling
   private activeNotes = new Map<string, ActiveNote[]>();
 
@@ -246,6 +250,8 @@ class Engine {
 
     this.running = true;
     this.startTime = performance.now();
+    this.timeOffset = 0;
+    this.lastWorkletTime = 0;
 
     // Reset all streams and active notes
     for (const stream of this.streams.values()) {
@@ -300,9 +306,27 @@ class Engine {
     return (performance.now() - this.startTime) / 1000;
   }
 
+  /** Seek to a specific time in seconds */
+  seekTo(targetTime: number): void {
+    // Calculate offset so that worklet time + offset = target time
+    this.timeOffset = targetTime - this.lastWorkletTime;
+
+    // Also adjust startTime for currentTime() calls
+    this.startTime = performance.now() - targetTime * 1000;
+
+    // Immediately process this time for responsive scrubbing
+    if (this.running) {
+      this.tick(this.lastWorkletTime);
+    }
+  }
+
   /** Main tick function */
-  private tick(t: number): void {
+  private tick(rawTime: number): void {
     if (!this.running) return;
+
+    // Store raw worklet time and apply offset
+    this.lastWorkletTime = rawTime;
+    const t = rawTime + this.timeOffset;
 
     const states = new Map<string, StreamState>();
     const midiReady = midi.isReady();

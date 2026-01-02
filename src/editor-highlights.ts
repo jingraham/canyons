@@ -367,20 +367,21 @@ function getRegisteredSignals(): RegisteredSignal[] {
 }
 
 /** Track active SVG elements for live updates */
-const signalPlotSvgs = new Map<string, { svg: SVGSVGElement; reg: RegisteredSignal }>();
+const signalPlotSvgs = new Map<string, { svg: SVGSVGElement; reg: RegisteredSignal; widget: SignalPlotWidget }>();
 
 /** Generate SVG path for a signal using actual .eval() */
-function generateSignalPathFromSignal(reg: RegisteredSignal, w: number, h: number): string {
+function generateSignalPathFromSignal(reg: RegisteredSignal, w: number, h: number, padding: number): string {
   const steps = 150;
   const points: string[] = [];
   const range = reg.max - reg.min || 1;
+  const plotHeight = h - 2 * padding;
 
   for (let i = 0; i <= steps; i++) {
     const t = (i / steps) * reg.duration;
     const val = reg.signal.eval(t);
-    const normalized = (val - reg.min) / range;
+    const normalized = Math.max(0, Math.min(1, (val - reg.min) / range));
     const x = (i / steps) * w;
-    const y = h - normalized * h;
+    const y = padding + plotHeight * (1 - normalized);
     points.push(`${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`);
   }
 
@@ -401,6 +402,7 @@ class SignalPlotWidget extends WidgetType {
   toDOM(): HTMLElement {
     const w = 300;
     const h = 18;
+    const padding = 2; // Keep dots fully visible at edges
 
     const wrapper = document.createElement('div');
     wrapper.className = 'cm-signal-plot';
@@ -415,7 +417,7 @@ class SignalPlotWidget extends WidgetType {
 
     // Signal curve path — ochre/sandstone
     const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    path.setAttribute('d', generateSignalPathFromSignal(this.reg, w, h));
+    path.setAttribute('d', generateSignalPathFromSignal(this.reg, w, h, padding));
     path.setAttribute('fill', 'none');
     path.setAttribute('stroke', '#c9a66b');
     path.setAttribute('stroke-width', '1');
@@ -444,13 +446,17 @@ class SignalPlotWidget extends WidgetType {
     svg.appendChild(dot);
 
     wrapper.appendChild(svg);
-    signalPlotSvgs.set(this.reg.name, { svg, reg: this.reg });
+    signalPlotSvgs.set(this.reg.name, { svg, reg: this.reg, widget: this });
 
     return wrapper;
   }
 
   destroy(): void {
-    signalPlotSvgs.delete(this.reg.name);
+    // Only remove our own entry, not a newer widget's entry with the same name
+    const entry = signalPlotSvgs.get(this.reg.name);
+    if (entry && entry.widget === this) {
+      signalPlotSvgs.delete(this.reg.name);
+    }
   }
 
   eq(other: SignalPlotWidget): boolean {
@@ -460,6 +466,8 @@ class SignalPlotWidget extends WidgetType {
 
 /** Build decorations from the signal registry */
 function buildSignalPlotDecorations(): DecorationSet {
+  // Note: Don't clear signalPlotSvgs here - widgets manage their own lifecycle
+  // via toDOM() (adds entry) and destroy() (removes entry)
   const builder = new RangeSetBuilder<Decoration>();
   const signals = getRegisteredSignals();
 
@@ -493,9 +501,10 @@ const signalPlotState = StateField.define<DecorationSet>({
       }
     }
     if (tr.docChanged) {
-      // Doc changed but signals not re-registered yet - keep old decorations
-      // The rebuildSignalPlots effect will be dispatched after eval
-      return decorations;
+      // Map decorations through doc changes to keep them at valid positions
+      // This prevents visual glitches while typing, and they'll be replaced
+      // when rebuildSignalPlots fires after the debounced eval
+      return decorations.map(tr.changes);
     }
     return decorations;
   },
@@ -505,8 +514,13 @@ const signalPlotState = StateField.define<DecorationSet>({
 /** Update all signal plots with current playhead position */
 export function updateSignalPlots(currentTime: number): void {
   for (const { svg, reg } of signalPlotSvgs.values()) {
+    // Skip if SVG is no longer in the DOM (widget was destroyed)
+    if (!svg.isConnected) continue;
+
     const w = 300;
     const h = 18;
+    const padding = 2; // Keep dots fully visible at edges
+    const plotHeight = h - 2 * padding;
     const range = reg.max - reg.min || 1;
 
     const playhead = svg.querySelector('.signal-playhead') as SVGLineElement | null;
@@ -519,8 +533,8 @@ export function updateSignalPlots(currentTime: number): void {
       const loopedTime = currentTime % reg.duration;
       const x = (loopedTime / reg.duration) * w;
       const val = reg.signal.eval(loopedTime);
-      const normalized = (val - reg.min) / range;
-      const y = h - normalized * h;
+      const normalized = Math.max(0, Math.min(1, (val - reg.min) / range));
+      const y = padding + plotHeight * (1 - normalized);
 
       if (playhead) {
         playhead.setAttribute('x1', String(x));
@@ -535,9 +549,10 @@ export function updateSignalPlots(currentTime: number): void {
     } else {
       const clampedTime = Math.min(currentTime, reg.duration);
       const x = (clampedTime / reg.duration) * w;
-      const val = reg.signal.eval(clampedTime);
-      const normalized = (val - reg.min) / range;
-      const y = h - normalized * h;
+      // Evaluate at actual currentTime for accurate value, but clamp to visible range
+      const val = reg.signal.eval(currentTime);
+      const normalized = Math.max(0, Math.min(1, (val - reg.min) / range));
+      const y = padding + plotHeight * (1 - normalized);
       const finished = currentTime > reg.duration;
 
       if (playhead) {

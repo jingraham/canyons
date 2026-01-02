@@ -17,54 +17,12 @@ import {
   parseConstPositions, registerSignal, clearSignalRegistry, rebuildSignalPlots
 } from './editor-highlights';
 
-// --- UI Setup ---
+// --- Examples ---
 
-const app = document.getElementById('app')!;
-app.innerHTML = `
-  <div class="layout">
-    <div class="editor-panel">
-      <div class="editor-header">
-        <span class="title">canyons</span>
-        <span class="status" id="status">Ready</span>
-      </div>
-      <details class="prelude">
-        <summary>prelude</summary>
-        <pre id="preludeCode"></pre>
-      </details>
-      <div id="editor"></div>
-      <div class="error-panel" id="errorPanel"></div>
-    </div>
-
-    <div class="viz-panel">
-      <div class="controls">
-        <button id="startBtn">Start</button>
-        <button id="stopBtn">Stop</button>
-        <select id="midiSelect">
-          <option value="">MIDI: None</option>
-        </select>
-      </div>
-
-      <div class="time-display">
-        <div class="label">Global Time T</div>
-        <div class="value" id="timeValue">0.000</div>
-        <div class="floor">floor: <span id="timeFloor">0</span></div>
-      </div>
-
-      <canvas id="signalCanvas"></canvas>
-
-      <div id="streamsContainer" class="streams"></div>
-
-      <div class="log">
-        <div class="log-header">Event Log</div>
-        <div id="logEntries"></div>
-      </div>
-    </div>
-  </div>
-`;
-
-// --- Code Editor ---
-
-const defaultCode = `// === Glass Machine ===
+const examples: Record<string, { name: string; code: string }> = {
+  glass: {
+    name: 'Glass Machine',
+    code: `// === Glass Machine ===
 // Philip Glass-inspired ostinato with breathing tempo and dynamics.
 
 // Subtle breath — barely perceptible ±1% variation
@@ -91,7 +49,127 @@ seq(cell).drive(pulse.mul(1.015)).vel(arc.mul(0.8)).inst('pluck').as('arp2');
 
 // Voice 3: Bass — root notes, one per cell cycle
 seq([45, 45, 48, 45]).drive(pulse.mul(1/8)).vel(arc.mul(0.7)).inst('pluckBass').as('bass');
+`,
+  },
+  acid: {
+    name: 'Acid Rain',
+    code: `// === Acid Rain ===
+// 303-inspired acid techno with filter sweeps and 4-on-floor.
+
+// Driving tempo
+const beat = bpm(138);
+
+// Filter sweep via velocity (simulates cutoff)
+const sweep = T.div(16).mod(1).mul(0.6).add(0.3);
+
+// Accent pattern — every 4th note hits harder
+const accent = onBeat(beat, 4);
+
+// === The 303 Line ===
+// Classic acid pattern: syncopated, chromatic slides
+const bassline = [
+  36, _, 36, 48,  // root, rest, root, octave
+  _, 38, _, 36,   // rest, minor 2nd slide, rest, root
+  39, _, 36, _,   // minor 3rd, rest, root, rest
+  48, 47, 45, 43, // descending chromatic
+];
+
+seq(bassline)
+  .drive(beat.mul(2))  // 16th notes
+  .vel(p => sweep.mul(accent.mul(0.3).add(0.7)))
+  .gate(p => p.lt(0.6))  // slightly staccato
+  .inst('saw')
+  .as('acid');
+
+// === Kick ===
+// Four-on-the-floor
+seq([36, 36, 36, 36])
+  .drive(beat)
+  .vel(0.9)
+  .inst('kick')
+  .as('kick');
+
+// === Hi-hats ===
+// Off-beat open hats
+seq([_, 42, _, 42])
+  .drive(beat)
+  .vel(p => offBeat(beat).mul(0.5).add(0.3))
+  .gate(stacc)
+  .inst('hihat')
+  .as('hats');
+
+// === Clap ===
+// On 2 and 4
+seq([_, 39, _, 39])
+  .drive(beat)
+  .vel(0.7)
+  .inst('snare')
+  .as('clap');
+`,
+  },
+};
+
+// --- UI Setup ---
+
+const app = document.getElementById('app')!;
+app.innerHTML = `
+  <div class="menu-bar">
+    <span class="logo">canyons</span>
+    <div class="divider"></div>
+
+    <div class="transport">
+      <button class="transport-btn" id="playBtn" title="Play">
+        <svg viewBox="0 0 24 24"><polygon points="5,3 19,12 5,21"/></svg>
+      </button>
+      <button class="transport-btn" id="stopBtn" title="Stop">
+        <svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16"/></svg>
+      </button>
+    </div>
+
+    <div class="scrubber">
+      <span class="time" id="timeDisplay">0.00</span>
+      <input type="range" id="timeScrubber" min="0" max="60" step="0.1" value="0">
+    </div>
+
+    <div class="divider"></div>
+
+    <select class="menu-select" id="exampleSelect">
+      <option value="">Examples</option>
+      <option value="glass">Glass Machine</option>
+      <option value="acid">Acid Rain</option>
+    </select>
+
+    <select class="menu-select" id="midiSelect">
+      <option value="">MIDI: None</option>
+    </select>
+
+    <span class="status-indicator" id="status">ready</span>
+  </div>
+
+  <div class="layout">
+    <div class="editor-panel">
+      <details class="prelude">
+        <summary>prelude</summary>
+        <pre id="preludeCode"></pre>
+      </details>
+      <div id="editor"></div>
+      <div class="error-panel" id="errorPanel"></div>
+    </div>
+
+    <div class="viz-panel">
+      <canvas id="signalCanvas"></canvas>
+      <div id="streamsContainer" class="streams"></div>
+      <div class="log">
+        <div class="log-header">Event Log</div>
+        <div id="logEntries"></div>
+      </div>
+    </div>
+  </div>
 `;
+
+// --- Code Editor ---
+
+const defaultCode = examples.glass.code;
 
 let lastGoodCode = defaultCode;
 let editor: EditorView;
@@ -187,6 +265,10 @@ function evalCode(code: string): void {
     statusEl.classList.remove('ok');
 
     // Re-evaluate last good code (also using hot reload)
+    // But clear signal plots since positions won't match current document
+    clearSignalRegistry();
+    editor.dispatch({ effects: rebuildSignalPlots.of(undefined) });
+
     try {
       engine.beginHotReload();
       const constNames = extractConstNames(lastGoodCode);
@@ -203,9 +285,7 @@ function evalCode(code: string): void {
         breath, vibrato, crescendo, decrescendo, onBeat, offBeat
       );
       engine.endHotReload();
-      if (result && typeof result === 'object') {
-        registerDetectedSignals(lastGoodCode, result);
-      }
+      // Don't register signals on error - positions don't match current document
     } catch {
       // Last good code also failed - shouldn't happen
     }
@@ -465,9 +545,11 @@ engine.setNoteCallback((event) => {
 });
 
 engine.setTickCallback((t, states, triggers) => {
-  // Update time display
-  document.getElementById('timeValue')!.textContent = t.toFixed(3);
-  document.getElementById('timeFloor')!.textContent = Math.floor(t).toString();
+  // Update time display (always) and scrubber (only if not being dragged)
+  document.getElementById('timeDisplay')!.textContent = t.toFixed(2);
+  if (!isScrubbing) {
+    timeScrubber.value = String(Math.min(t, 60));
+  }
 
   // Store history with triggers from engine
   signalHistory.push({ t, streams: new Map(states), triggers });
@@ -490,18 +572,54 @@ engine.setTickCallback((t, states, triggers) => {
 
 // --- UI Bindings ---
 
-document.getElementById('startBtn')!.addEventListener('click', () => {
+const playBtn = document.getElementById('playBtn')!;
+const stopBtn = document.getElementById('stopBtn')!;
+
+playBtn.addEventListener('click', () => {
   signalHistory.length = 0;
   document.getElementById('logEntries')!.innerHTML = '';
   log('Engine started');
   engine.start();
-  document.getElementById('startBtn')!.classList.add('active');
+  playBtn.classList.add('active');
 });
 
-document.getElementById('stopBtn')!.addEventListener('click', () => {
+stopBtn.addEventListener('click', () => {
   engine.shutdown();
   log('Engine stopped');
-  document.getElementById('startBtn')!.classList.remove('active');
+  playBtn.classList.remove('active');
+});
+
+// --- Scrubber ---
+
+const timeScrubber = document.getElementById('timeScrubber') as HTMLInputElement;
+let isScrubbing = false;
+
+timeScrubber.addEventListener('mousedown', () => {
+  isScrubbing = true;
+});
+
+timeScrubber.addEventListener('touchstart', () => {
+  isScrubbing = true;
+});
+
+timeScrubber.addEventListener('mouseup', () => {
+  isScrubbing = false;
+});
+
+timeScrubber.addEventListener('touchend', () => {
+  isScrubbing = false;
+});
+
+// Also handle mouse leaving the scrubber while dragging
+document.addEventListener('mouseup', () => {
+  isScrubbing = false;
+});
+
+timeScrubber.addEventListener('input', () => {
+  const t = parseFloat(timeScrubber.value);
+  engine.seekTo(t);
+  // Clear history when scrubbing to avoid stale visualization
+  signalHistory.length = 0;
 });
 
 // --- MIDI Setup ---
@@ -546,6 +664,38 @@ midi.init().then((success) => {
   } else {
     console.log('WebMIDI not available');
   }
+});
+
+// --- Example Selector ---
+
+const exampleSelect = document.getElementById('exampleSelect') as HTMLSelectElement;
+
+exampleSelect.addEventListener('change', () => {
+  const exampleId = exampleSelect.value;
+  if (exampleId && examples[exampleId]) {
+    const example = examples[exampleId];
+
+    // Cancel any pending debounced eval to avoid redundant widget recreation
+    if (evalTimeout !== null) {
+      clearTimeout(evalTimeout);
+      evalTimeout = null;
+    }
+
+    // Update editor content
+    editor.dispatch({
+      changes: {
+        from: 0,
+        to: editor.state.doc.length,
+        insert: example.code,
+      },
+    });
+    // Trigger evaluation
+    evalCode(example.code);
+    updateSeqInfo(editor, example.code);
+    log(`Loaded example: ${example.name}`);
+  }
+  // Reset dropdown to "Examples" label
+  exampleSelect.value = '';
 });
 
 // --- Prelude Viewer ---
