@@ -7,7 +7,7 @@
 
 import type { Stream, StreamState } from './stream';
 import { midi } from './midi';
-import { getInstrument } from './instruments';
+import { internalSynth } from './internal-synth';
 
 export interface NoteEvent {
   stream: string;
@@ -117,9 +117,12 @@ class Engine {
         // Stream wasn't touched - remove it
         // First send note-offs for any active notes
         const activeNotes = this.activeNotes.get(name);
-        if (activeNotes && midiReady) {
+        if (activeNotes) {
           for (const active of activeNotes) {
-            midi.noteOff(name, active.note);
+            internalSynth.noteOff(name, active.note);
+            if (midiReady) {
+              midi.noteOff(name, active.note);
+            }
           }
         }
         this.activeNotes.delete(name);
@@ -140,9 +143,12 @@ class Engine {
       // Send note-off for any currently sounding notes before structural change
       const midiReady = midi.isReady();
       const activeNotes = this.activeNotes.get(name);
-      if (activeNotes && midiReady) {
+      if (activeNotes) {
         for (const active of activeNotes) {
-          midi.noteOff(name, active.note);
+          internalSynth.noteOff(name, active.note);
+          if (midiReady) {
+            midi.noteOff(name, active.note);
+          }
         }
       }
       this.activeNotes.delete(name);
@@ -221,13 +227,6 @@ class Engine {
     }
   }
 
-  /** Play a note using Web Audio with the specified instrument */
-  playNote(freq: number, duration = 0.15, velocity = 0.5, instrument = 'sine'): void {
-    const ctx = this.getAudioContext();
-    const player = getInstrument(instrument);
-    player(ctx, freq, velocity, duration);
-  }
-
   /** Convert MIDI note to frequency */
   midiToFreq(midi: number): number {
     return 440 * Math.pow(2, (midi - 69) / 12);
@@ -259,7 +258,11 @@ class Engine {
     }
     this.activeNotes.clear();
 
-    // Send all notes off to MIDI to start clean
+    // Initialize internal synth with audio context
+    internalSynth.setAudioContext(ctx);
+
+    // Send all notes off to start clean
+    internalSynth.allNotesOff();
     if (midi.isReady()) {
       midi.allNotesOff();
     }
@@ -288,7 +291,8 @@ class Engine {
       this.intervalId = null;
     }
 
-    // Send all notes off to MIDI
+    // Send all notes off
+    internalSynth.allNotesOff();
     if (midi.isReady()) {
       midi.allNotesOff();
     }
@@ -347,6 +351,7 @@ class Engine {
 
         // Turn off any currently active notes for this stream before new trigger
         for (const activeNote of streamNotes) {
+          internalSynth.noteOff(name, activeNote.note);
           if (midiReady) {
             midi.noteOff(name, activeNote.note);
           }
@@ -359,10 +364,10 @@ class Engine {
         for (const note of notes) {
           if (note === null) continue;
 
-          // Play internal sound with the stream's instrument
-          this.playNote(this.midiToFreq(note), 0.2, state.velocity, stream.instrument);
+          // Play internal sound (MIDI/MPE driven voice)
+          internalSynth.noteOn(name, note, state.velocity, stream.instrument, t);
 
-          // Send MIDI note on
+          // Send external MIDI note on
           let channel = 0;
           if (midiReady) {
             channel = midi.noteOn(name, note, state.velocity, t);
@@ -387,7 +392,8 @@ class Engine {
       // Handle gate changes for active notes
       for (const activeNote of streamNotes) {
         if (activeNote.gateOpen && !state.gateOpen) {
-          // Gate just closed — send note off
+          // Gate just closed — send note off to both internal and external
+          internalSynth.noteOff(name, activeNote.note);
           if (midiReady) {
             midi.noteOff(name, activeNote.note);
           }
@@ -395,17 +401,25 @@ class Engine {
         }
       }
 
-      // Send continuous MPE data for active notes
-      if (midiReady && streamNotes.length > 0) {
+      // Send continuous MPE data for active notes (both internal and external)
+      if (streamNotes.length > 0) {
         const pressure = stream.getPressure(t, state.phase);
         const slide = stream.getSlide(t, state.phase);
         const bend = stream.getBend(t, state.phase);
 
-        for (const activeNote of streamNotes) {
-          if (activeNote.gateOpen) {
-            if (pressure !== 0) midi.sendPressure(activeNote.channel, pressure);
-            if (slide !== 0) midi.sendSlide(activeNote.channel, slide);
-            if (bend !== 0) midi.sendBend(activeNote.channel, bend);
+        // Send to internal synth (always)
+        if (pressure !== 0) internalSynth.sendPressure(name, pressure);
+        if (slide !== 0) internalSynth.sendSlide(name, slide);
+        if (bend !== 0) internalSynth.sendBend(name, bend);
+
+        // Send to external MIDI
+        if (midiReady) {
+          for (const activeNote of streamNotes) {
+            if (activeNote.gateOpen) {
+              if (pressure !== 0) midi.sendPressure(activeNote.channel, pressure);
+              if (slide !== 0) midi.sendSlide(activeNote.channel, slide);
+              if (bend !== 0) midi.sendBend(activeNote.channel, bend);
+            }
           }
         }
       }

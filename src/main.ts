@@ -54,30 +54,39 @@ seq([45, 45, 48, 45]).drive(pulse.mul(1/8)).vel(arc.mul(0.7)).inst('pluckBass').
   acid: {
     name: 'Acid Rain',
     code: `// === Acid Rain ===
-// 303-inspired acid techno with filter sweeps and 4-on-floor.
+// 303-inspired acid with continuous filter modulation via MPE.
+// pressure() → filter cutoff, slide() → resonance
 
 // Driving tempo
 const beat = bpm(138);
 
-// Filter sweep via velocity (simulates cutoff)
-const sweep = T.div(16).mod(1).mul(0.6).add(0.3);
+// === Filter Modulation ===
+// Slow filter sweep: opens over 2 bars, closes over 2 bars
+const filterLFO = T.div(8).mod(1);              // 0→1 over 2 bars
+const filterEnv = filterLFO.mul(2).sub(1).abs(); // triangle 0→1→0
 
-// Accent pattern — every 4th note hits harder
+// Per-note filter envelope: opens quickly, closes slowly (phase-based)
+const noteFilter = swell;  // 0→1→0 within each note
+
+// Resonance pulses on accented notes
 const accent = onBeat(beat, 4);
+const rez = accent.mul(0.6).add(0.2);
 
 // === The 303 Line ===
 // Classic acid pattern: syncopated, chromatic slides
 const bassline = [
   36, _, 36, 48,  // root, rest, root, octave
-  _, 38, _, 36,   // rest, minor 2nd slide, rest, root
+  _, 38, _, 36,   // rest, minor 2nd, rest, root
   39, _, 36, _,   // minor 3rd, rest, root, rest
   48, 47, 45, 43, // descending chromatic
 ];
 
 seq(bassline)
   .drive(beat.mul(2))  // 16th notes
-  .vel(p => sweep.mul(accent.mul(0.3).add(0.7)))
-  .gate(p => p.lt(0.6))  // slightly staccato
+  .vel(p => accent.mul(0.3).add(0.6))
+  .gate(p => p.lt(0.7))  // slightly staccato
+  .pressure(p => noteFilter(p).mul(filterEnv).mul(0.8).add(0.1))  // filter cutoff!
+  .slide(p => rez)  // resonance!
   .inst('saw')
   .as('acid');
 
