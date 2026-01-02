@@ -10,7 +10,7 @@ import type { StreamState } from './stream';
 const app = document.getElementById('app')!;
 app.innerHTML = `
   <div class="header">
-    <h1><span>canyons</span> — glass machine</h1>
+    <h1><span>canyons</span> — phase 2</h1>
     <div class="controls">
       <button id="startBtn">Start</button>
       <button id="stopBtn">Stop</button>
@@ -34,6 +34,11 @@ app.innerHTML = `
     <div class="log-header">Event Log</div>
     <div id="logEntries"></div>
   </div>
+
+  <details class="prelude-viewer">
+    <summary>Standard Prelude</summary>
+    <pre id="preludeCode"></pre>
+  </details>
 `;
 
 // --- Visualization State ---
@@ -272,6 +277,47 @@ midi.init().then((success) => {
   }
 });
 
+// --- Prelude Viewer ---
+const preludeCode = `// === Time Units ===
+const bpm = (n) => T.mul(n / 60)
+const hz = (n) => T.mul(n)
+
+// === Per-Note Shapes (functions of phase) ===
+const swell = (p) => p.mul(Math.PI).sin()       // 0 → 1 → 0
+const attack = (p) => p.mul(10).min(1)          // fast rise
+const decay = (p) => p.mul(-1).add(1)           // fall off
+
+// === Gate Helpers (functions of phase) ===
+const legato = (p) => p.lt(0.95)                // 95% of period
+const stacc = (p) => p.lt(0.3)                  // 30% of period
+const tenuto = (p) => p.lt(0.85)                // 85% of period
+
+// === Time-Varying Shapes (use T) ===
+const breath = (period = 8, depth = 0.2) =>
+  T.div(period).mul(Math.PI * 2).sin().mul(depth).add(1)
+
+const vibrato = (rate = 5, depth = 0.3) =>
+  T.mul(rate).mul(Math.PI * 2).sin().mul(depth)
+
+const crescendo = (duration) => T.div(duration).min(1)
+const decrescendo = (duration) => T.div(duration).mul(-1).add(1).max(0)
+
+// === Masks ===
+const onBeat = (driver, n) => driver.mod(n).lt(1)
+const offBeat = (driver) => driver.add(0.5).mod(1).lt(0.5)
+
+// === Rest ===
+const _ = null
+
+// === Instruments ===
+// Oscillators: 'sine', 'saw', 'square', 'triangle'
+// Keys: 'piano', 'epiano'
+// Drums: 'kick', 'snare', 'hihat'
+// Waveguide: 'pluck', 'pluckBass' (Karplus-Strong)
+`;
+
+document.getElementById('preludeCode')!.textContent = preludeCode;
+
 // --- Demo: Glass Machine ---
 // A Philip Glass-inspired ostinato with breathing tempo and dynamics.
 // The key to Glass: SAME pattern, slight phase drift between voices.
@@ -294,16 +340,17 @@ const cell = [
   64, 60, 57, 60,  // E C A C (falling back)
 ];
 
-// Voice 1: The main arpeggio
-seq(cell).drive(pulse).vel(arc).as('arp1');
+// Voice 1: The main arpeggio (plucked string - Karplus-Strong waveguide)
+seq(cell).drive(pulse).vel(arc).inst('pluck').as('arp1');
 
 // Voice 2: Same pattern, 1.5% faster — creates the Glass phasing effect
-seq(cell).drive(pulse.mul(1.015)).vel(arc.mul(0.8)).as('arp2');
+seq(cell).drive(pulse.mul(1.015)).vel(arc.mul(0.8)).inst('pluck').as('arp2');
 
-// Voice 3: Bass — root notes, one per cell cycle (8 notes = 1 bass note)
-seq([45, 45, 48, 45]).drive(pulse.mul(1/8)).vel(arc.mul(0.7)).as('bass');
+// Voice 3: Bass — root notes, one per cell cycle (plucked bass)
+seq([45, 45, 48, 45]).drive(pulse.mul(1/8)).vel(arc.mul(0.7)).inst('pluckBass').as('bass');
 
-console.log('canyons Phase 1 — Glass Machine');
+console.log('canyons Phase 2 — Glass Machine');
 console.log('================================');
-console.log('Two arpeggios phasing against each other.');
+console.log('Using Karplus-Strong waveguide synthesis (pluck, pluckBass)');
+console.log('Click "Standard Prelude" to see available helpers.');
 console.log('Click Start to begin.');

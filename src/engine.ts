@@ -7,6 +7,7 @@
 
 import type { Stream, StreamState } from './stream';
 import { midi } from './midi';
+import { getInstrument } from './instruments';
 
 export interface NoteEvent {
   stream: string;
@@ -85,23 +86,11 @@ class Engine {
     return this.audioCtx;
   }
 
-  /** Play a note using Web Audio */
-  playNote(freq: number, duration = 0.15, velocity = 0.5): void {
+  /** Play a note using Web Audio with the specified instrument */
+  playNote(freq: number, duration = 0.15, velocity = 0.5, instrument = 'sine'): void {
     const ctx = this.getAudioContext();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-
-    osc.type = 'sine';
-    osc.frequency.value = freq;
-
-    gain.gain.value = velocity * 0.3;
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
-
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-
-    osc.start();
-    osc.stop(ctx.currentTime + duration);
+    const player = getInstrument(instrument);
+    player(ctx, freq, velocity, duration);
   }
 
   /** Convert MIDI note to frequency */
@@ -192,8 +181,8 @@ class Engine {
         for (const note of notes) {
           if (note === null) continue;
 
-          // Play internal sound
-          this.playNote(this.midiToFreq(note), 0.2, state.velocity);
+          // Play internal sound with the stream's instrument
+          this.playNote(this.midiToFreq(note), 0.2, state.velocity, stream.instrument);
 
           // Send MIDI note on
           let channel = 0;
