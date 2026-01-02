@@ -10,7 +10,12 @@ import {
   bpm, hz, swell, attack, decay, legato, stacc, tenuto,
   breath, vibrato, crescendo, decrescendo, onBeat, offBeat
 } from './index';
+import { Signal } from './signal';
 import type { StreamState } from './stream';
+import {
+  editorHighlights, updateHighlights, updateSeqInfo, updateSignalPlots,
+  parseConstPositions, registerSignal, clearSignalRegistry, rebuildSignalPlots
+} from './editor-highlights';
 
 // --- UI Setup ---
 
@@ -93,6 +98,42 @@ let editor: EditorView;
 let evalTimeout: number | null = null;
 const DEBOUNCE_MS = 500;
 
+/** Extract const names from code */
+function extractConstNames(code: string): string[] {
+  const names: string[] = [];
+  const regex = /const\s+(\w+)\s*=/g;
+  let match;
+  while ((match = regex.exec(code)) !== null) {
+    names.push(match[1]);
+  }
+  return names;
+}
+
+/** Wrap code to return all const values for signal detection */
+function wrapCodeForSignalDetection(code: string, constNames: string[]): string {
+  if (constNames.length === 0) return code;
+  const returnObj = constNames.map(n => `${n}: typeof ${n} !== 'undefined' ? ${n} : undefined`).join(', ');
+  return `${code}\nreturn { ${returnObj} };`;
+}
+
+/** Register detected signals and rebuild plots */
+function registerDetectedSignals(code: string, values: Record<string, unknown>): void {
+  clearSignalRegistry();
+  const positions = parseConstPositions(code);
+
+  for (const [name, value] of Object.entries(values)) {
+    if (value instanceof Signal) {
+      const lineEnd = positions.get(name);
+      if (lineEnd !== undefined) {
+        registerSignal(name, value, lineEnd);
+      }
+    }
+  }
+
+  // Trigger decoration rebuild
+  editor.dispatch({ effects: rebuildSignalPlots.of(undefined) });
+}
+
 // Create a function that evaluates code with canyons primitives in scope
 function evalCode(code: string): void {
   const errorPanel = document.getElementById('errorPanel')!;
@@ -102,14 +143,18 @@ function evalCode(code: string): void {
     // Hot reload: mark start of eval cycle
     engine.beginHotReload();
 
+    // Extract const names for signal detection
+    const constNames = extractConstNames(code);
+    const wrappedCode = wrapCodeForSignalDetection(code, constNames);
+
     // Create a function with all canyons primitives in scope
     const fn = new Function(
       'T', 'seq', '_', 'engine', 'midi', 'stop', 'hush',
       'bpm', 'hz', 'swell', 'attack', 'decay', 'legato', 'stacc', 'tenuto',
       'breath', 'vibrato', 'crescendo', 'decrescendo', 'onBeat', 'offBeat',
-      code
+      wrappedCode
     );
-    fn(
+    const result = fn(
       T, seq, _, engine, midi, stop, hush,
       bpm, hz, swell, attack, decay, legato, stacc, tenuto,
       breath, vibrato, crescendo, decrescendo, onBeat, offBeat
@@ -117,6 +162,11 @@ function evalCode(code: string): void {
 
     // Hot reload: remove streams that weren't re-registered
     engine.endHotReload();
+
+    // Register any Signals for plotting
+    if (result && typeof result === 'object') {
+      registerDetectedSignals(code, result);
+    }
 
     // Success!
     lastGoodCode = code;
@@ -139,18 +189,23 @@ function evalCode(code: string): void {
     // Re-evaluate last good code (also using hot reload)
     try {
       engine.beginHotReload();
+      const constNames = extractConstNames(lastGoodCode);
+      const wrappedCode = wrapCodeForSignalDetection(lastGoodCode, constNames);
       const fn = new Function(
         'T', 'seq', '_', 'engine', 'midi', 'stop', 'hush',
         'bpm', 'hz', 'swell', 'attack', 'decay', 'legato', 'stacc', 'tenuto',
         'breath', 'vibrato', 'crescendo', 'decrescendo', 'onBeat', 'offBeat',
-        lastGoodCode
+        wrappedCode
       );
-      fn(
+      const result = fn(
         T, seq, _, engine, midi, stop, hush,
         bpm, hz, swell, attack, decay, legato, stacc, tenuto,
         breath, vibrato, crescendo, decrescendo, onBeat, offBeat
       );
       engine.endHotReload();
+      if (result && typeof result === 'object') {
+        registerDetectedSignals(lastGoodCode, result);
+      }
     } catch {
       // Last good code also failed - shouldn't happen
     }
@@ -164,6 +219,7 @@ editor = new EditorView({
     basicSetup,
     javascript({ typescript: true }),
     oneDark,
+    editorHighlights,
     EditorView.updateListener.of((update) => {
       if (update.docChanged) {
         // Debounce evaluation
@@ -171,7 +227,10 @@ editor = new EditorView({
           clearTimeout(evalTimeout);
         }
         evalTimeout = window.setTimeout(() => {
-          evalCode(update.state.doc.toString());
+          const code = update.state.doc.toString();
+          evalCode(code);
+          // Update sequence position info for highlighting
+          updateSeqInfo(editor, code);
         }, DEBOUNCE_MS);
       }
     }),
@@ -183,8 +242,9 @@ editor = new EditorView({
   parent: document.getElementById('editor')!,
 });
 
-// Initial evaluation
+// Initial evaluation and sequence parsing
 evalCode(defaultCode);
+updateSeqInfo(editor, defaultCode);
 
 // --- Visualization State ---
 
@@ -380,6 +440,16 @@ engine.setTickCallback((t, states, triggers) => {
   // Update viz
   updateStreamViz();
   drawSignalCanvas();
+
+  // Update editor highlights with active indices
+  const activeIndices = new Map<string, number>();
+  for (const [name, state] of states) {
+    activeIndices.set(name, state.index);
+  }
+  updateHighlights(editor, activeIndices);
+
+  // Update signal plot playheads
+  updateSignalPlots(t);
 });
 
 // --- UI Bindings ---
