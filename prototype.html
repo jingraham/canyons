@@ -1,0 +1,741 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>canyons — Phase 0 Prototype</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'SF Mono', 'Consolas', monospace;
+      background: #0a0a0a;
+      color: #e0e0e0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      padding: 20px;
+    }
+    h1 { font-size: 14px; color: #888; margin-bottom: 20px; }
+    h1 span { color: #fff; }
+
+    .controls {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 20px;
+    }
+    button {
+      background: #222;
+      border: 1px solid #444;
+      color: #fff;
+      padding: 8px 16px;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 12px;
+    }
+    button:hover { background: #333; }
+    button.active { background: #2a5a2a; border-color: #4a8a4a; }
+
+    .viz {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    .signal-display {
+      background: #111;
+      border: 1px solid #333;
+      padding: 15px;
+      border-radius: 4px;
+    }
+    .signal-display h2 {
+      font-size: 11px;
+      color: #666;
+      margin-bottom: 10px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+    .signal-value {
+      font-size: 32px;
+      font-weight: 300;
+      color: #4ecdc4;
+    }
+    .signal-floor {
+      font-size: 14px;
+      color: #666;
+      margin-top: 5px;
+    }
+
+    .streams-container {
+      display: flex;
+      gap: 20px;
+      flex-wrap: wrap;
+    }
+    .stream-viz {
+      background: #111;
+      border: 1px solid #333;
+      padding: 15px;
+      border-radius: 4px;
+      min-width: 300px;
+      flex: 1;
+    }
+    .stream-viz h2 {
+      font-size: 11px;
+      color: #666;
+      margin-bottom: 10px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+    .stream-notes {
+      display: flex;
+      gap: 4px;
+      margin-bottom: 10px;
+    }
+    .note-cell {
+      width: 36px;
+      height: 36px;
+      background: #1a1a1a;
+      border: 1px solid #333;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      color: #888;
+      transition: all 0.1s;
+    }
+    .note-cell.active {
+      background: #4ecdc4;
+      color: #000;
+      border-color: #4ecdc4;
+    }
+    .note-cell.rest {
+      color: #444;
+    }
+    .stream-info {
+      font-size: 11px;
+      color: #666;
+    }
+    .stream-info span {
+      color: #4ecdc4;
+    }
+
+    .log {
+      background: #111;
+      border: 1px solid #333;
+      padding: 15px;
+      border-radius: 4px;
+      max-height: 200px;
+      overflow-y: auto;
+      font-size: 11px;
+    }
+    .log h2 {
+      font-size: 11px;
+      color: #666;
+      margin-bottom: 10px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+    .log-entry {
+      color: #888;
+      line-height: 1.6;
+    }
+    .log-entry.trigger {
+      color: #4ecdc4;
+    }
+    .log-entry .time {
+      color: #666;
+      margin-right: 10px;
+    }
+
+    canvas {
+      width: 100%;
+      height: 120px;
+      background: #0a0a0a;
+      border: 1px solid #333;
+      border-radius: 4px;
+    }
+  </style>
+</head>
+<body>
+  <h1><span>canyons</span> — phase 0 prototype</h1>
+
+  <div class="controls">
+    <button id="startBtn">Start</button>
+    <button id="stopBtn">Stop</button>
+  </div>
+
+  <div class="viz">
+    <div class="signal-display">
+      <h2>Global Time T</h2>
+      <div class="signal-value" id="timeValue">0.000</div>
+      <div class="signal-floor">floor: <span id="timeFloor">0</span></div>
+    </div>
+
+    <canvas id="signalCanvas"></canvas>
+
+    <div class="streams-container" id="streamsContainer"></div>
+
+    <div class="log">
+      <h2>Event Log</h2>
+      <div id="logEntries"></div>
+    </div>
+  </div>
+
+  <script>
+// ============================================================
+// canyons Phase 0 Prototype
+// ============================================================
+// Goal: Validate integer-crossing logic with hysteresis
+// before building infrastructure.
+// ============================================================
+
+// --- Audio Context ---
+let audioCtx = null;
+
+function initAudio() {
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  return audioCtx;
+}
+
+function playNote(freq, duration = 0.15, velocity = 0.5) {
+  const ctx = initAudio();
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+
+  osc.type = 'sine';
+  osc.frequency.value = freq;
+
+  gain.gain.value = velocity * 0.3;
+  gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
+
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+
+  osc.start();
+  osc.stop(ctx.currentTime + duration);
+}
+
+function midiToFreq(midi) {
+  return 440 * Math.pow(2, (midi - 69) / 12);
+}
+
+// --- Signal Class ---
+// A Signal wraps a function of time. All operations return new Signals.
+class Signal {
+  constructor(fn) {
+    this._fn = fn;
+  }
+
+  // Evaluate the signal at time t
+  eval(t) {
+    return this._fn(t);
+  }
+
+  // Arithmetic
+  mul(x) {
+    const xFn = x instanceof Signal ? (t) => x.eval(t) : () => x;
+    return new Signal((t) => this.eval(t) * xFn(t));
+  }
+
+  div(x) {
+    const xFn = x instanceof Signal ? (t) => x.eval(t) : () => x;
+    return new Signal((t) => this.eval(t) / xFn(t));
+  }
+
+  add(x) {
+    const xFn = x instanceof Signal ? (t) => x.eval(t) : () => x;
+    return new Signal((t) => this.eval(t) + xFn(t));
+  }
+
+  sub(x) {
+    const xFn = x instanceof Signal ? (t) => x.eval(t) : () => x;
+    return new Signal((t) => this.eval(t) - xFn(t));
+  }
+
+  // Shaping
+  mod(x) {
+    const xFn = x instanceof Signal ? (t) => x.eval(t) : () => x;
+    return new Signal((t) => {
+      const val = this.eval(t);
+      const m = xFn(t);
+      return ((val % m) + m) % m; // proper modulo for negatives
+    });
+  }
+
+  sin() {
+    return new Signal((t) => Math.sin(this.eval(t)));
+  }
+
+  floor() {
+    return new Signal((t) => Math.floor(this.eval(t)));
+  }
+
+  // Comparison
+  lt(x) {
+    const xFn = x instanceof Signal ? (t) => x.eval(t) : () => x;
+    return new Signal((t) => this.eval(t) < xFn(t) ? 1 : 0);
+  }
+
+  gt(x) {
+    const xFn = x instanceof Signal ? (t) => x.eval(t) : () => x;
+    return new Signal((t) => this.eval(t) > xFn(t) ? 1 : 0);
+  }
+
+  min(x) {
+    const xFn = x instanceof Signal ? (t) => x.eval(t) : () => x;
+    return new Signal((t) => Math.min(this.eval(t), xFn(t)));
+  }
+
+  max(x) {
+    const xFn = x instanceof Signal ? (t) => x.eval(t) : () => x;
+    return new Signal((t) => Math.max(this.eval(t), xFn(t)));
+  }
+}
+
+// Global time signal
+const T = new Signal((t) => t);
+
+// --- Standard Prelude ---
+const bpm = (n) => T.mul(n / 60);
+const hz = (n) => T.mul(n);
+
+// Per-note shapes (functions of phase signal)
+const swell = (p) => p.mul(Math.PI).sin();
+const legato = (p) => p.lt(0.95);
+const stacc = (p) => p.lt(0.3);
+
+// Time-varying shapes
+const crescendo = (duration) => T.div(duration).min(1);
+const breath = (period = 8, depth = 0.2) => T.div(period).mul(Math.PI * 2).sin().mul(depth).add(1);
+
+// Rest marker
+const _ = null;
+
+// --- Stream Class ---
+// A Stream represents a sequence driven by a signal, with modifiers.
+class Stream {
+  constructor(values, driver) {
+    this.values = values;
+    this.driver = driver;
+    this.name = null;
+
+    // Modifier signals/functions (null = use default)
+    this._vel = null;      // velocity: constant, signal, or fn(phase) => signal
+    this._gate = null;     // gate: fn(phase) => signal (1 = on, 0 = off)
+    this._pressure = null;
+    this._slide = null;
+    this._bend = null;
+    this._mask = null;     // mask signal
+    this._inst = 'sine';
+
+    // State for integer crossing detection
+    this._lastFloor = null;
+    this._noteOnTime = null;
+  }
+
+  vel(v) {
+    this._vel = v;
+    return this;
+  }
+
+  gate(g) {
+    this._gate = g;
+    return this;
+  }
+
+  pressure(p) {
+    this._pressure = p;
+    return this;
+  }
+
+  slide(s) {
+    this._slide = s;
+    return this;
+  }
+
+  bend(b) {
+    this._bend = b;
+    return this;
+  }
+
+  mask(m) {
+    this._mask = m;
+    return this;
+  }
+
+  inst(name) {
+    this._inst = name;
+    return this;
+  }
+
+  as(name) {
+    this.name = name;
+    streams.set(name, this);
+    return this;
+  }
+
+  // Evaluate at time t, returns { trigger, note, velocity, phase, index, gateOpen }
+  tick(t) {
+    const driverValue = this.driver.eval(t);
+    const currentFloor = Math.floor(driverValue);
+    const phase = driverValue - currentFloor;
+    const index = ((currentFloor % this.values.length) + this.values.length) % this.values.length;
+    const note = this.values[index];
+
+    // Check mask
+    let masked = false;
+    if (this._mask) {
+      masked = this._mask.eval(t) < 0.5;
+    }
+
+    // Integer crossing detection with hysteresis
+    // Trigger fires when floor INCREASES (not on decrease)
+    let trigger = false;
+    if (this._lastFloor !== null && currentFloor > this._lastFloor && !masked) {
+      trigger = true;
+      this._noteOnTime = t;
+    }
+    this._lastFloor = currentFloor;
+
+    // Calculate velocity
+    let velocity = 0.7; // default
+    if (this._vel !== null) {
+      if (typeof this._vel === 'number') {
+        velocity = this._vel;
+      } else if (this._vel instanceof Signal) {
+        velocity = this._vel.eval(t);
+      } else if (typeof this._vel === 'function') {
+        // fn(phase) => signal
+        const phaseSignal = new Signal(() => phase);
+        const velSignal = this._vel(phaseSignal);
+        velocity = velSignal instanceof Signal ? velSignal.eval(t) : velSignal;
+      }
+    }
+
+    // Calculate gate (phase within note)
+    let gateOpen = true;
+    if (this._gate !== null && this._noteOnTime !== null) {
+      const phaseSignal = new Signal(() => phase);
+      const gateSignal = this._gate(phaseSignal);
+      gateOpen = (gateSignal instanceof Signal ? gateSignal.eval(t) : gateSignal) >= 0.5;
+    }
+
+    return {
+      trigger: trigger && note !== null,
+      note,
+      velocity: Math.max(0, Math.min(1, velocity)),
+      phase,
+      index,
+      gateOpen,
+      masked,
+      driverValue,
+      currentFloor
+    };
+  }
+}
+
+function seq(values) {
+  return {
+    drive(signal) {
+      return new Stream(values, signal);
+    }
+  };
+}
+
+// --- Stream Registry ---
+const streams = new Map();
+
+function stop(name) {
+  streams.delete(name);
+}
+
+function hush() {
+  streams.clear();
+}
+
+// --- Engine ---
+let running = false;
+let startTime = null;
+let intervalId = null;
+const TICK_MS = 50; // 20Hz update rate
+
+// Visualization state
+const signalHistory = [];
+const MAX_HISTORY = 200;
+
+function log(message, isTriger = false) {
+  const logEl = document.getElementById('logEntries');
+  const entry = document.createElement('div');
+  entry.className = 'log-entry' + (isTriger ? ' trigger' : '');
+  const elapsed = startTime ? ((performance.now() - startTime) / 1000).toFixed(2) : '0.00';
+  entry.innerHTML = `<span class="time">${elapsed}s</span>${message}`;
+  logEl.insertBefore(entry, logEl.firstChild);
+
+  // Keep log size manageable
+  while (logEl.children.length > 50) {
+    logEl.removeChild(logEl.lastChild);
+  }
+}
+
+function tick() {
+  if (!running) return;
+
+  const now = performance.now();
+  const t = (now - startTime) / 1000; // time in seconds
+
+  // Update T display
+  document.getElementById('timeValue').textContent = t.toFixed(3);
+  document.getElementById('timeFloor').textContent = Math.floor(t);
+
+  // Store signal history for visualization
+  signalHistory.push({ t, streams: {} });
+  if (signalHistory.length > MAX_HISTORY) signalHistory.shift();
+
+  // Tick all streams
+  for (const [name, stream] of streams) {
+    const result = stream.tick(t);
+
+    // Store for visualization
+    signalHistory[signalHistory.length - 1].streams[name] = result;
+
+    if (result.trigger) {
+      log(`NOTE ON ${result.note} (${name}) vel=${result.velocity.toFixed(2)}`, true);
+      playNote(midiToFreq(result.note), 0.2, result.velocity);
+    }
+  }
+
+  // Update visualizations
+  updateStreamViz();
+  drawSignalCanvas();
+}
+
+function updateStreamViz() {
+  const container = document.getElementById('streamsContainer');
+
+  for (const [name, stream] of streams) {
+    let el = document.getElementById(`stream-${name}`);
+    if (!el) {
+      el = document.createElement('div');
+      el.id = `stream-${name}`;
+      el.className = 'stream-viz';
+      container.appendChild(el);
+    }
+
+    const latest = signalHistory.length > 0
+      ? signalHistory[signalHistory.length - 1].streams[name]
+      : null;
+
+    const noteCells = stream.values.map((v, i) => {
+      const isActive = latest && latest.index === i;
+      const isRest = v === null;
+      return `<div class="note-cell ${isActive ? 'active' : ''} ${isRest ? 'rest' : ''}">${isRest ? '_' : v}</div>`;
+    }).join('');
+
+    el.innerHTML = `
+      <h2>${name}</h2>
+      <div class="stream-notes">${noteCells}</div>
+      <div class="stream-info">
+        driver: <span>${latest ? latest.driverValue.toFixed(2) : '-'}</span> |
+        floor: <span>${latest ? latest.currentFloor : '-'}</span> |
+        phase: <span>${latest ? latest.phase.toFixed(2) : '-'}</span> |
+        vel: <span>${latest ? latest.velocity.toFixed(2) : '-'}</span>
+      </div>
+    `;
+  }
+
+  // Remove stale stream vizs
+  for (const child of [...container.children]) {
+    const name = child.id.replace('stream-', '');
+    if (!streams.has(name)) {
+      container.removeChild(child);
+    }
+  }
+}
+
+function drawSignalCanvas() {
+  const canvas = document.getElementById('signalCanvas');
+  const ctx = canvas.getContext('2d');
+
+  // Set actual size
+  canvas.width = canvas.offsetWidth * 2;
+  canvas.height = canvas.offsetHeight * 2;
+  ctx.scale(2, 2);
+
+  const w = canvas.offsetWidth;
+  const h = canvas.offsetHeight;
+
+  ctx.fillStyle = '#0a0a0a';
+  ctx.fillRect(0, 0, w, h);
+
+  if (signalHistory.length < 2) return;
+
+  // Find range
+  let minVal = Infinity, maxVal = -Infinity;
+  for (const entry of signalHistory) {
+    for (const name in entry.streams) {
+      const v = entry.streams[name].driverValue;
+      minVal = Math.min(minVal, v);
+      maxVal = Math.max(maxVal, v);
+    }
+  }
+
+  // Add padding
+  const range = maxVal - minVal || 1;
+  minVal -= range * 0.1;
+  maxVal += range * 0.1;
+
+  // Draw integer lines
+  ctx.strokeStyle = '#222';
+  ctx.lineWidth = 1;
+  for (let i = Math.floor(minVal); i <= Math.ceil(maxVal); i++) {
+    const y = h - ((i - minVal) / (maxVal - minVal)) * h;
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(w, y);
+    ctx.stroke();
+
+    ctx.fillStyle = '#444';
+    ctx.font = '10px monospace';
+    ctx.fillText(i.toString(), 5, y - 3);
+  }
+
+  // Draw signals
+  const colors = ['#4ecdc4', '#ff6b6b', '#ffe66d', '#95e1d3'];
+  let colorIdx = 0;
+
+  for (const [name, stream] of streams) {
+    ctx.strokeStyle = colors[colorIdx % colors.length];
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+
+    let first = true;
+    for (let i = 0; i < signalHistory.length; i++) {
+      const entry = signalHistory[i];
+      const data = entry.streams[name];
+      if (!data) continue;
+
+      const x = (i / (MAX_HISTORY - 1)) * w;
+      const y = h - ((data.driverValue - minVal) / (maxVal - minVal)) * h;
+
+      if (first) {
+        ctx.moveTo(x, y);
+        first = false;
+      } else {
+        ctx.lineTo(x, y);
+      }
+    }
+    ctx.stroke();
+
+    // Draw trigger points
+    ctx.fillStyle = colors[colorIdx % colors.length];
+    for (let i = 0; i < signalHistory.length; i++) {
+      const entry = signalHistory[i];
+      const data = entry.streams[name];
+      if (data && data.trigger) {
+        const x = (i / (MAX_HISTORY - 1)) * w;
+        const y = h - ((data.driverValue - minVal) / (maxVal - minVal)) * h;
+        ctx.beginPath();
+        ctx.arc(x, y, 4, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    colorIdx++;
+  }
+}
+
+function start() {
+  if (running) return;
+
+  initAudio();
+  running = true;
+  startTime = performance.now();
+
+  // Clear old state
+  signalHistory.length = 0;
+  for (const stream of streams.values()) {
+    stream._lastFloor = null;
+    stream._noteOnTime = null;
+  }
+
+  document.getElementById('logEntries').innerHTML = '';
+  log('Engine started');
+
+  intervalId = setInterval(tick, TICK_MS);
+
+  document.getElementById('startBtn').classList.add('active');
+  document.getElementById('stopBtn').classList.remove('active');
+}
+
+function stopEngine() {
+  running = false;
+  if (intervalId) {
+    clearInterval(intervalId);
+    intervalId = null;
+  }
+  log('Engine stopped');
+
+  document.getElementById('startBtn').classList.remove('active');
+}
+
+// --- UI Bindings ---
+document.getElementById('startBtn').addEventListener('click', start);
+document.getElementById('stopBtn').addEventListener('click', stopEngine);
+
+// --- Demo Setup ---
+// This is the "hardcoded signal graph" for Phase 0 validation
+
+// ============================================================
+// DEMO 1: Basic - proves integer crossing works
+// ============================================================
+// seq([60, 64, 67]).drive(bpm(120)).as('melody');
+// seq([36, 43]).drive(bpm(60)).as('bass');
+// seq([72, _, 74, 76]).drive(bpm(180)).as('high');
+
+// ============================================================
+// DEMO 2: Rubato - the tempo BREATHES
+// This is what makes canyons different: the continuous signal
+// (breath) modulates the driver, so notes naturally slow down
+// and speed up. No rescheduling needed.
+// ============================================================
+const breathing = breath(4, 0.25);           // 4-second breath cycle, ±25%
+const rubatoTempo = breathing.mul(bpm(80));  // tempo breathes around 80 BPM
+
+seq([60, 62, 64, 65, 67, 65, 64, 62])        // simple scale fragment
+  .drive(rubatoTempo)
+  .as('rubato');
+
+// ============================================================
+// DEMO 3: Polyrhythm - 3 against 4
+// Same base tempo, different multipliers = phase drift
+// ============================================================
+const baseTempo = bpm(90);
+seq([48, 52, 55]).drive(baseTempo).as('three');           // 3 notes
+seq([60, 63, 65, 67]).drive(baseTempo.mul(4/3)).as('four'); // 4 notes in same time
+
+// ============================================================
+// DEMO 4: Crescendo - 30 second volume ramp (sped up for demo)
+// ============================================================
+const thirtySecCrescendo = crescendo(30);
+seq([36, 36, 43, 43]).drive(bpm(60)).vel(thirtySecCrescendo).as('swell');
+
+// Log the demo
+console.log('canyons Phase 0 Prototype');
+console.log('========================');
+console.log('');
+console.log('DEMO 2: Rubato — watch the "rubato" line curve (not straight!)');
+console.log('  The tempo breathes. Notes naturally slow down and speed up.');
+console.log('');
+console.log('DEMO 3: Polyrhythm — "three" vs "four"');
+console.log('  3:4 polyrhythm from different driver multipliers.');
+console.log('');
+console.log('DEMO 4: Crescendo — "swell" gets louder over 30 seconds');
+console.log('  Watch the vel value increase in the stream info.');
+console.log('');
+console.log('Click "Start" to begin.');
+
+  </script>
+</body>
+</html>

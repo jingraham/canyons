@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>canyons</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'SF Mono', 'Consolas', 'Monaco', monospace;
+      background: #0a0a0a;
+      color: #e0e0e0;
+      min-height: 100vh;
+      padding: 20px;
+    }
+
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+    }
+
+    h1 {
+      font-size: 14px;
+      font-weight: normal;
+      color: #888;
+    }
+    h1 span { color: #fff; }
+
+    .controls {
+      display: flex;
+      gap: 10px;
+    }
+
+    button, select {
+      background: #222;
+      border: 1px solid #444;
+      color: #fff;
+      padding: 8px 16px;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 12px;
+      transition: all 0.15s;
+    }
+    button:hover, select:hover { background: #333; }
+    button.active { background: #2a5a2a; border-color: #4a8a4a; }
+    select { min-width: 150px; }
+    select option { background: #222; }
+
+    .time-display {
+      background: #111;
+      border: 1px solid #333;
+      padding: 15px;
+      border-radius: 4px;
+      margin-bottom: 20px;
+    }
+    .time-display .label {
+      font-size: 11px;
+      color: #666;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 5px;
+    }
+    .time-display .value {
+      font-size: 32px;
+      font-weight: 300;
+      color: #4ecdc4;
+    }
+    .time-display .floor {
+      font-size: 14px;
+      color: #666;
+      margin-top: 5px;
+    }
+
+    canvas {
+      width: 100%;
+      height: 120px;
+      background: #0a0a0a;
+      border: 1px solid #333;
+      border-radius: 4px;
+      margin-bottom: 20px;
+    }
+
+    .streams {
+      display: flex;
+      gap: 20px;
+      flex-wrap: wrap;
+      margin-bottom: 20px;
+    }
+
+    .stream-viz {
+      background: #111;
+      border: 1px solid #333;
+      padding: 15px;
+      border-radius: 4px;
+      min-width: 280px;
+      flex: 1;
+    }
+    .stream-viz h2 {
+      font-size: 11px;
+      font-weight: normal;
+      color: #666;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 10px;
+    }
+    .stream-notes {
+      display: flex;
+      gap: 4px;
+      margin-bottom: 10px;
+      flex-wrap: wrap;
+    }
+    .note-cell {
+      min-width: 32px;
+      height: 32px;
+      background: #1a1a1a;
+      border: 1px solid #333;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      color: #888;
+      padding: 0 6px;
+      transition: all 0.1s;
+    }
+    .note-cell.active {
+      background: #4ecdc4;
+      color: #000;
+      border-color: #4ecdc4;
+    }
+    .note-cell.rest { color: #444; }
+    .stream-info {
+      font-size: 11px;
+      color: #666;
+    }
+    .stream-info span { color: #4ecdc4; }
+
+    .log {
+      background: #111;
+      border: 1px solid #333;
+      padding: 15px;
+      border-radius: 4px;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+    .log-header {
+      font-size: 11px;
+      color: #666;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 10px;
+    }
+    .log-entry {
+      color: #888;
+      line-height: 1.6;
+      font-size: 11px;
+    }
+    .log-entry.trigger { color: #4ecdc4; }
+    .log-entry .time {
+      color: #666;
+      margin-right: 10px;
+    }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
