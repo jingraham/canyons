@@ -109,6 +109,12 @@ export class Stream {
     this._noteOnTime = null;
   }
 
+  /** Transfer internal state from another stream (for hot reload) */
+  transferStateFrom(other: Stream): void {
+    this._lastFloor = other._lastFloor;
+    this._noteOnTime = other._noteOnTime;
+  }
+
   /** Evaluate a modifier value at time t with given phase */
   private evalModifier(mod: ModifierValue | null, t: number, phase: number, defaultVal: number): number {
     if (mod === null) return defaultVal;

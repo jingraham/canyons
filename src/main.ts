@@ -99,8 +99,8 @@ function evalCode(code: string): void {
   const statusEl = document.getElementById('status')!;
 
   try {
-    // Clear existing streams
-    engine.hush();
+    // Hot reload: mark start of eval cycle
+    engine.beginHotReload();
 
     // Create a function with all canyons primitives in scope
     const fn = new Function(
@@ -115,6 +115,9 @@ function evalCode(code: string): void {
       breath, vibrato, crescendo, decrescendo, onBeat, offBeat
     );
 
+    // Hot reload: remove streams that weren't re-registered
+    engine.endHotReload();
+
     // Success!
     lastGoodCode = code;
     errorPanel.textContent = '';
@@ -123,12 +126,7 @@ function evalCode(code: string): void {
     statusEl.classList.remove('error');
     statusEl.classList.add('ok');
 
-    // Restart engine if it was running
-    if (engine.isRunning()) {
-      engine.shutdown();
-      signalHistory.length = 0;
-      engine.start();
-    }
+    // Engine keeps running - no restart needed for hot reload!
   } catch (e) {
     // Show error but keep running last good code
     const err = e as Error;
@@ -138,9 +136,9 @@ function evalCode(code: string): void {
     statusEl.classList.add('error');
     statusEl.classList.remove('ok');
 
-    // Re-evaluate last good code
+    // Re-evaluate last good code (also using hot reload)
     try {
-      engine.hush();
+      engine.beginHotReload();
       const fn = new Function(
         'T', 'seq', '_', 'engine', 'midi', 'stop', 'hush',
         'bpm', 'hz', 'swell', 'attack', 'decay', 'legato', 'stacc', 'tenuto',
@@ -152,6 +150,7 @@ function evalCode(code: string): void {
         bpm, hz, swell, attack, decay, legato, stacc, tenuto,
         breath, vibrato, crescendo, decrescendo, onBeat, offBeat
       );
+      engine.endHotReload();
     } catch {
       // Last good code also failed - shouldn't happen
     }

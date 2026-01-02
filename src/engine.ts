@@ -81,6 +81,9 @@ class Engine {
   // Track active notes per stream for gate handling
   private activeNotes = new Map<string, ActiveNote[]>();
 
+  // Hot reload: track which streams were touched during current eval
+  private touchedStreams = new Set<string>();
+
   // Callbacks
   private onNote: NoteCallback | null = null;
   private onTick: ((t: number, states: Map<string, StreamState>, triggers: Set<string>) => void) | null = null;
@@ -96,8 +99,51 @@ class Engine {
   readonly tickHz = 500;
   readonly fallbackTickMs = 50; // 20Hz fallback
 
-  /** Register a stream */
+  /** Begin a hot reload cycle - call before evaluating new code */
+  beginHotReload(): void {
+    this.touchedStreams.clear();
+  }
+
+  /** End a hot reload cycle - removes streams that weren't re-registered */
+  endHotReload(): void {
+    const midiReady = midi.isReady();
+
+    for (const [name] of this.streams) {
+      if (!this.touchedStreams.has(name)) {
+        // Stream wasn't touched - remove it
+        // First send note-offs for any active notes
+        const activeNotes = this.activeNotes.get(name);
+        if (activeNotes && midiReady) {
+          for (const active of activeNotes) {
+            midi.noteOff(name, active.note);
+          }
+        }
+        this.activeNotes.delete(name);
+        this.streams.delete(name);
+      }
+    }
+  }
+
+  /** Register a stream (hot reload aware) */
   register(name: string, stream: Stream): void {
+    this.touchedStreams.add(name);
+
+    const existing = this.streams.get(name);
+    if (existing) {
+      // Hot reload: transfer state from old stream to new
+      stream.transferStateFrom(existing);
+
+      // Send note-off for any currently sounding notes before structural change
+      const midiReady = midi.isReady();
+      const activeNotes = this.activeNotes.get(name);
+      if (activeNotes && midiReady) {
+        for (const active of activeNotes) {
+          midi.noteOff(name, active.note);
+        }
+      }
+      this.activeNotes.delete(name);
+    }
+
     this.streams.set(name, stream);
   }
 
