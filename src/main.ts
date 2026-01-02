@@ -1,51 +1,198 @@
 /**
- * canyons — Demo / Development Entry Point
+ * canyons — Phase 3: Live Coding Environment
  */
 
-import { T, seq, _, engine, bpm, breath, crescendo, midi } from './index';
+import { EditorView, basicSetup } from 'codemirror';
+import { javascript } from '@codemirror/lang-javascript';
+import { oneDark } from '@codemirror/theme-one-dark';
+import {
+  T, seq, _, engine, midi, stop, hush,
+  bpm, hz, swell, attack, decay, legato, stacc, tenuto,
+  breath, vibrato, crescendo, decrescendo, onBeat, offBeat
+} from './index';
 import type { StreamState } from './stream';
 
 // --- UI Setup ---
 
 const app = document.getElementById('app')!;
 app.innerHTML = `
-  <div class="header">
-    <h1><span>canyons</span> — phase 2</h1>
-    <div class="controls">
-      <button id="startBtn">Start</button>
-      <button id="stopBtn">Stop</button>
-      <select id="midiSelect">
-        <option value="">MIDI: None</option>
-      </select>
+  <div class="layout">
+    <div class="editor-panel">
+      <div class="editor-header">
+        <span class="title">canyons</span>
+        <span class="status" id="status">Ready</span>
+      </div>
+      <details class="prelude">
+        <summary>prelude</summary>
+        <pre id="preludeCode"></pre>
+      </details>
+      <div id="editor"></div>
+      <div class="error-panel" id="errorPanel"></div>
+    </div>
+
+    <div class="viz-panel">
+      <div class="controls">
+        <button id="startBtn">Start</button>
+        <button id="stopBtn">Stop</button>
+        <select id="midiSelect">
+          <option value="">MIDI: None</option>
+        </select>
+      </div>
+
+      <div class="time-display">
+        <div class="label">Global Time T</div>
+        <div class="value" id="timeValue">0.000</div>
+        <div class="floor">floor: <span id="timeFloor">0</span></div>
+      </div>
+
+      <canvas id="signalCanvas"></canvas>
+
+      <div id="streamsContainer" class="streams"></div>
+
+      <div class="log">
+        <div class="log-header">Event Log</div>
+        <div id="logEntries"></div>
+      </div>
     </div>
   </div>
-
-  <div class="time-display">
-    <div class="label">Global Time T</div>
-    <div class="value" id="timeValue">0.000</div>
-    <div class="floor">floor: <span id="timeFloor">0</span></div>
-  </div>
-
-  <canvas id="signalCanvas"></canvas>
-
-  <div id="streamsContainer" class="streams"></div>
-
-  <div class="log">
-    <div class="log-header">Event Log</div>
-    <div id="logEntries"></div>
-  </div>
-
-  <details class="prelude-viewer">
-    <summary>Standard Prelude</summary>
-    <pre id="preludeCode"></pre>
-  </details>
 `;
+
+// --- Code Editor ---
+
+const defaultCode = `// === Glass Machine ===
+// Philip Glass-inspired ostinato with breathing tempo and dynamics.
+
+// Subtle breath — barely perceptible ±1% variation
+const breathing = breath(12, 0.01);
+
+// Base tempo: 180 BPM with gentle breathing
+const pulse = breathing.mul(bpm(180));
+
+// Dynamic arc: starts soft, swells over 60 seconds
+const arc = crescendo(60).mul(0.4).add(0.4);
+
+// === The Arpeggio ===
+// A simple rising/falling figure in A minor — the "cell"
+const cell = [
+  57, 60, 64, 67,  // A C E G (Am7 rising)
+  64, 60, 57, 60,  // E C A C (falling back)
+];
+
+// Voice 1: The main arpeggio (plucked string)
+seq(cell).drive(pulse).vel(arc).inst('pluck').as('arp1');
+
+// Voice 2: Same pattern, 1.5% faster — creates the Glass phasing effect
+seq(cell).drive(pulse.mul(1.015)).vel(arc.mul(0.8)).inst('pluck').as('arp2');
+
+// Voice 3: Bass — root notes, one per cell cycle
+seq([45, 45, 48, 45]).drive(pulse.mul(1/8)).vel(arc.mul(0.7)).inst('pluckBass').as('bass');
+`;
+
+let lastGoodCode = defaultCode;
+let editor: EditorView;
+let evalTimeout: number | null = null;
+const DEBOUNCE_MS = 500;
+
+// Create a function that evaluates code with canyons primitives in scope
+function evalCode(code: string): void {
+  const errorPanel = document.getElementById('errorPanel')!;
+  const statusEl = document.getElementById('status')!;
+
+  try {
+    // Clear existing streams
+    engine.hush();
+
+    // Create a function with all canyons primitives in scope
+    const fn = new Function(
+      'T', 'seq', '_', 'engine', 'midi', 'stop', 'hush',
+      'bpm', 'hz', 'swell', 'attack', 'decay', 'legato', 'stacc', 'tenuto',
+      'breath', 'vibrato', 'crescendo', 'decrescendo', 'onBeat', 'offBeat',
+      code
+    );
+    fn(
+      T, seq, _, engine, midi, stop, hush,
+      bpm, hz, swell, attack, decay, legato, stacc, tenuto,
+      breath, vibrato, crescendo, decrescendo, onBeat, offBeat
+    );
+
+    // Success!
+    lastGoodCode = code;
+    errorPanel.textContent = '';
+    errorPanel.classList.remove('visible');
+    statusEl.textContent = 'OK';
+    statusEl.classList.remove('error');
+    statusEl.classList.add('ok');
+
+    // Restart engine if it was running
+    if (engine.isRunning()) {
+      engine.shutdown();
+      signalHistory.length = 0;
+      engine.start();
+    }
+  } catch (e) {
+    // Show error but keep running last good code
+    const err = e as Error;
+    errorPanel.textContent = err.message;
+    errorPanel.classList.add('visible');
+    statusEl.textContent = 'Error';
+    statusEl.classList.add('error');
+    statusEl.classList.remove('ok');
+
+    // Re-evaluate last good code
+    try {
+      engine.hush();
+      const fn = new Function(
+        'T', 'seq', '_', 'engine', 'midi', 'stop', 'hush',
+        'bpm', 'hz', 'swell', 'attack', 'decay', 'legato', 'stacc', 'tenuto',
+        'breath', 'vibrato', 'crescendo', 'decrescendo', 'onBeat', 'offBeat',
+        lastGoodCode
+      );
+      fn(
+        T, seq, _, engine, midi, stop, hush,
+        bpm, hz, swell, attack, decay, legato, stacc, tenuto,
+        breath, vibrato, crescendo, decrescendo, onBeat, offBeat
+      );
+    } catch {
+      // Last good code also failed - shouldn't happen
+    }
+  }
+}
+
+// Initialize CodeMirror
+editor = new EditorView({
+  doc: defaultCode,
+  extensions: [
+    basicSetup,
+    javascript({ typescript: true }),
+    oneDark,
+    EditorView.updateListener.of((update) => {
+      if (update.docChanged) {
+        // Debounce evaluation
+        if (evalTimeout !== null) {
+          clearTimeout(evalTimeout);
+        }
+        evalTimeout = window.setTimeout(() => {
+          evalCode(update.state.doc.toString());
+        }, DEBOUNCE_MS);
+      }
+    }),
+    EditorView.theme({
+      '&': { height: '100%' },
+      '.cm-scroller': { overflow: 'auto' },
+    }),
+  ],
+  parent: document.getElementById('editor')!,
+});
+
+// Initial evaluation
+evalCode(defaultCode);
 
 // --- Visualization State ---
 
 interface HistoryEntry {
   t: number;
   streams: Map<string, StreamState>;
+  triggers: Set<string>; // accumulated triggers since last viz frame
 }
 
 const signalHistory: HistoryEntry[] = [];
@@ -125,76 +272,95 @@ function drawSignalCanvas(): void {
 
   if (signalHistory.length < 2) return;
 
-  // Find range
-  let minVal = Infinity, maxVal = -Infinity;
-  for (const entry of signalHistory) {
-    for (const state of entry.streams.values()) {
-      minVal = Math.min(minVal, state.driverValue);
-      maxVal = Math.max(maxVal, state.driverValue);
-    }
-  }
+  const streams = engine.getStreams();
+  const streamNames = [...streams.keys()];
+  const numStreams = streamNames.length;
 
-  const range = maxVal - minVal || 1;
-  minVal -= range * 0.1;
-  maxVal += range * 0.1;
+  if (numStreams === 0) return;
 
-  // Draw integer lines
-  ctx.strokeStyle = '#222';
-  ctx.lineWidth = 1;
-  for (let i = Math.floor(minVal); i <= Math.ceil(maxVal); i++) {
-    const y = h - ((i - minVal) / (maxVal - minVal)) * h;
+  // Each stream gets its own horizontal lane
+  const laneHeight = h / numStreams;
+  const colors = ['#4ecdc4', '#ff6b6b', '#ffe66d', '#95e1d3'];
+
+  streamNames.forEach((name, laneIdx) => {
+    const laneTop = laneIdx * laneHeight;
+    const laneBottom = laneTop + laneHeight;
+    const color = colors[laneIdx % colors.length];
+
+    // Draw lane separator
+    ctx.strokeStyle = '#222';
+    ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.moveTo(0, y);
-    ctx.lineTo(w, y);
+    ctx.moveTo(0, laneBottom);
+    ctx.lineTo(w, laneBottom);
     ctx.stroke();
 
+    // Draw stream name
     ctx.fillStyle = '#444';
     ctx.font = '10px monospace';
-    ctx.fillText(i.toString(), 5, y - 3);
-  }
+    ctx.fillText(name, 5, laneTop + 12);
 
-  // Draw signals
-  const colors = ['#4ecdc4', '#ff6b6b', '#ffe66d', '#95e1d3'];
-  const streams = engine.getStreams();
-  let colorIdx = 0;
+    // Lane padding (same for sawtooth and trigger lines)
+    const padding = laneHeight * 0.15;
 
-  for (const name of streams.keys()) {
-    ctx.strokeStyle = colors[colorIdx % colors.length];
-    ctx.lineWidth = 2;
+    // Draw subtle trigger markers first (behind sawtooth)
+    ctx.strokeStyle = '#333';
+    ctx.lineWidth = 1;
+    for (let i = 0; i < signalHistory.length; i++) {
+      const entry = signalHistory[i];
+      if (entry.triggers.has(name)) {
+        const x = (i / (MAX_HISTORY - 1)) * w;
+        ctx.beginPath();
+        ctx.moveTo(x, laneTop + padding);
+        ctx.lineTo(x, laneBottom - padding);
+        ctx.stroke();
+      }
+    }
+
+    // Draw phase line (sawtooth pattern, 0-1)
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.5;
     ctx.beginPath();
 
     let first = true;
+    let lastPhase = 0;
+
     for (let i = 0; i < signalHistory.length; i++) {
       const state = signalHistory[i].streams.get(name);
       if (!state) continue;
 
       const x = (i / (MAX_HISTORY - 1)) * w;
-      const y = h - ((state.driverValue - minVal) / (maxVal - minVal)) * h;
+      const phase = state.phase;
 
+      // Map phase 0-1 to lane
+      const y = laneBottom - padding - (phase * (laneHeight - 2 * padding));
+
+      // Detect phase wrap (trigger) - don't draw line across reset
       if (first) {
         ctx.moveTo(x, y);
         first = false;
+      } else if (phase < lastPhase - 0.5) {
+        // Phase wrapped, start new line segment
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(x, y);
       } else {
         ctx.lineTo(x, y);
       }
+
+      lastPhase = phase;
     }
     ctx.stroke();
+  });
 
-    // Draw trigger points
-    ctx.fillStyle = colors[colorIdx % colors.length];
-    for (let i = 0; i < signalHistory.length; i++) {
-      const state = signalHistory[i].streams.get(name);
-      if (state?.trigger) {
-        const x = (i / (MAX_HISTORY - 1)) * w;
-        const y = h - ((state.driverValue - minVal) / (maxVal - minVal)) * h;
-        ctx.beginPath();
-        ctx.arc(x, y, 4, 0, Math.PI * 2);
-        ctx.fill();
-      }
-    }
-
-    colorIdx++;
-  }
+  // Draw playhead
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 2;
+  const playheadX = ((signalHistory.length - 1) / (MAX_HISTORY - 1)) * w;
+  ctx.beginPath();
+  ctx.moveTo(playheadX, 0);
+  ctx.lineTo(playheadX, h);
+  ctx.stroke();
 }
 
 // --- Engine Callbacks ---
@@ -203,13 +369,13 @@ engine.setNoteCallback((event) => {
   log(`NOTE ON ${event.note} (${event.stream}) vel=${event.velocity.toFixed(2)}`, true);
 });
 
-engine.setTickCallback((t, states) => {
+engine.setTickCallback((t, states, triggers) => {
   // Update time display
   document.getElementById('timeValue')!.textContent = t.toFixed(3);
   document.getElementById('timeFloor')!.textContent = Math.floor(t).toString();
 
-  // Store history
-  signalHistory.push({ t, streams: new Map(states) });
+  // Store history with triggers from engine
+  signalHistory.push({ t, streams: new Map(states), triggers });
   if (signalHistory.length > MAX_HISTORY) signalHistory.shift();
 
   // Update viz
@@ -278,79 +444,44 @@ midi.init().then((success) => {
 });
 
 // --- Prelude Viewer ---
-const preludeCode = `// === Time Units ===
-const bpm = (n) => T.mul(n / 60)
-const hz = (n) => T.mul(n)
 
-// === Per-Note Shapes (functions of phase) ===
-const swell = (p) => p.mul(Math.PI).sin()       // 0 → 1 → 0
-const attack = (p) => p.mul(10).min(1)          // fast rise
-const decay = (p) => p.mul(-1).add(1)           // fall off
+const preludeCode = `// Time Units
+bpm(n)                    // beats per minute → signal
+hz(n)                     // hertz → signal
 
-// === Gate Helpers (functions of phase) ===
-const legato = (p) => p.lt(0.95)                // 95% of period
-const stacc = (p) => p.lt(0.3)                  // 30% of period
-const tenuto = (p) => p.lt(0.85)                // 85% of period
+// Per-Note Shapes (phase → signal)
+swell(p)                  // 0 → 1 → 0
+attack(p)                 // fast rise
+decay(p)                  // fall off
 
-// === Time-Varying Shapes (use T) ===
-const breath = (period = 8, depth = 0.2) =>
-  T.div(period).mul(Math.PI * 2).sin().mul(depth).add(1)
+// Gate Helpers (phase → signal)
+legato(p)                 // 95% of period
+stacc(p)                  // 30% of period
+tenuto(p)                 // 85% of period
 
-const vibrato = (rate = 5, depth = 0.3) =>
-  T.mul(rate).mul(Math.PI * 2).sin().mul(depth)
+// Time-Varying Shapes (use T)
+breath(period, depth)     // oscillates around 1
+vibrato(rate, depth)      // oscillates around 0
+crescendo(duration)       // 0 → 1 over duration
+decrescendo(duration)     // 1 → 0 over duration
 
-const crescendo = (duration) => T.div(duration).min(1)
-const decrescendo = (duration) => T.div(duration).mul(-1).add(1).max(0)
+// Masks
+onBeat(driver, n)         // every nth beat
+offBeat(driver)           // off-beats
 
-// === Masks ===
-const onBeat = (driver, n) => driver.mod(n).lt(1)
-const offBeat = (driver) => driver.add(0.5).mod(1).lt(0.5)
+// Instruments
+'sine', 'saw', 'square', 'triangle'
+'piano', 'epiano'
+'kick', 'snare', 'hihat'
+'pluck', 'pluckBass'
 
-// === Rest ===
-const _ = null
-
-// === Instruments ===
-// Oscillators: 'sine', 'saw', 'square', 'triangle'
-// Keys: 'piano', 'epiano'
-// Drums: 'kick', 'snare', 'hihat'
-// Waveguide: 'pluck', 'pluckBass' (Karplus-Strong)
+// Rest
+_                         // null (skip note)
 `;
 
 document.getElementById('preludeCode')!.textContent = preludeCode;
 
-// --- Demo: Glass Machine ---
-// A Philip Glass-inspired ostinato with breathing tempo and dynamics.
-// The key to Glass: SAME pattern, slight phase drift between voices.
-
-// Subtle breath — barely perceptible ±1% variation
-const breathing = breath(12, 0.01);
-
-// Base tempo: 180 BPM with gentle breathing
-const pulse = breathing.mul(bpm(180));
-
-// Dynamic arc: starts soft, swells over 60 seconds
-const arc = crescendo(60).mul(0.4).add(0.4);
-
-// === The Arpeggio ===
-// A simple rising/falling figure in A minor — the "cell"
-// This is the SAME pattern in all voices, just phased
-
-const cell = [
-  57, 60, 64, 67,  // A C E G (Am7 rising)
-  64, 60, 57, 60,  // E C A C (falling back)
-];
-
-// Voice 1: The main arpeggio (plucked string - Karplus-Strong waveguide)
-seq(cell).drive(pulse).vel(arc).inst('pluck').as('arp1');
-
-// Voice 2: Same pattern, 1.5% faster — creates the Glass phasing effect
-seq(cell).drive(pulse.mul(1.015)).vel(arc.mul(0.8)).inst('pluck').as('arp2');
-
-// Voice 3: Bass — root notes, one per cell cycle (plucked bass)
-seq([45, 45, 48, 45]).drive(pulse.mul(1/8)).vel(arc.mul(0.7)).inst('pluckBass').as('bass');
-
-console.log('canyons Phase 2 — Glass Machine');
-console.log('================================');
-console.log('Using Karplus-Strong waveguide synthesis (pluck, pluckBass)');
-console.log('Click "Standard Prelude" to see available helpers.');
-console.log('Click Start to begin.');
+console.log('canyons Phase 3 — Live Coding Environment');
+console.log('=========================================');
+console.log('Edit code on the left. Changes auto-reload after 500ms.');
+console.log('Errors preserve last working code.');
