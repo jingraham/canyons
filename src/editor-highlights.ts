@@ -393,12 +393,19 @@ class SignalPlotWidget extends WidgetType {
     super();
   }
 
+  // Tell CodeMirror the exact height to expect
+  get estimatedHeight(): number {
+    return 24;
+  }
+
   toDOM(): HTMLElement {
     const w = 300;
-    const h = 20;
+    const h = 18;
 
-    const wrapper = document.createElement('span');
+    const wrapper = document.createElement('div');
     wrapper.className = 'cm-signal-plot';
+    wrapper.style.height = '24px';
+    wrapper.style.lineHeight = '24px';
 
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     svg.setAttribute('width', String(w));
@@ -406,32 +413,32 @@ class SignalPlotWidget extends WidgetType {
     svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
     svg.classList.add('cm-signal-svg');
 
-    // Signal curve path
+    // Signal curve path — ochre/sandstone
     const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
     path.setAttribute('d', generateSignalPathFromSignal(this.reg, w, h));
     path.setAttribute('fill', 'none');
-    path.setAttribute('stroke', '#4ecdc4');
+    path.setAttribute('stroke', '#c9a66b');
     path.setAttribute('stroke-width', '1');
-    path.setAttribute('opacity', '0.6');
+    path.setAttribute('opacity', '0.5');
     path.classList.add('signal-curve');
     svg.appendChild(path);
 
-    // Playhead line
+    // Playhead line — subtle
     const playhead = document.createElementNS('http://www.w3.org/2000/svg', 'line');
     playhead.setAttribute('x1', '0');
     playhead.setAttribute('y1', '0');
     playhead.setAttribute('x2', '0');
     playhead.setAttribute('y2', String(h));
-    playhead.setAttribute('stroke', '#666');
+    playhead.setAttribute('stroke', '#5a564e');
     playhead.setAttribute('stroke-width', '1');
     playhead.setAttribute('opacity', '0');
     playhead.classList.add('signal-playhead');
     svg.appendChild(playhead);
 
-    // Current value dot
+    // Current value dot — ochre
     const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-    dot.setAttribute('r', '2.5');
-    dot.setAttribute('fill', '#4ecdc4');
+    dot.setAttribute('r', '2');
+    dot.setAttribute('fill', '#c9a66b');
     dot.setAttribute('opacity', '0');
     dot.classList.add('signal-dot');
     svg.appendChild(dot);
@@ -499,7 +506,7 @@ const signalPlotState = StateField.define<DecorationSet>({
 export function updateSignalPlots(currentTime: number): void {
   for (const { svg, reg } of signalPlotSvgs.values()) {
     const w = 300;
-    const h = 20;
+    const h = 18;
     const range = reg.max - reg.min || 1;
 
     const playhead = svg.querySelector('.signal-playhead') as SVGLineElement | null;
@@ -547,28 +554,27 @@ export function updateSignalPlots(currentTime: number): void {
   }
 }
 
-// --- Theme ---
+// --- Theme (geological palette) ---
 
 const highlightTheme = EditorView.baseTheme({
   '.cm-active-note': {
-    backgroundColor: 'rgba(78, 205, 196, 0.3)',
-    borderRadius: '2px',
-    boxShadow: '0 0 4px rgba(78, 205, 196, 0.5)',
+    backgroundColor: 'rgba(201, 166, 107, 0.25)',
+    borderRadius: '1px',
   },
   '.cm-trigger-note': {
-    backgroundColor: 'rgba(78, 205, 196, 0.6)',
-    borderRadius: '2px',
-    boxShadow: '0 0 8px rgba(78, 205, 196, 0.8)',
+    backgroundColor: 'rgba(201, 166, 107, 0.5)',
+    borderRadius: '1px',
   },
   '.cm-signal-plot': {
-    display: 'block',
-    marginLeft: '32px',
-    marginTop: '2px',
-    marginBottom: '4px',
+    display: 'flex',
+    alignItems: 'center',
+    paddingLeft: '4ch',
+    pointerEvents: 'none',
+    boxSizing: 'border-box',
   },
   '.cm-signal-svg': {
     display: 'block',
-    overflow: 'visible',
+    pointerEvents: 'none',
   },
 });
 

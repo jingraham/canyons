@@ -212,6 +212,44 @@ function evalCode(code: string): void {
   }
 }
 
+// Geological theme overrides for CodeMirror
+const geoTheme = EditorView.theme({
+  '&': {
+    height: '100%',
+    backgroundColor: '#0d0c0a',
+  },
+  '.cm-scroller': {
+    overflow: 'auto',
+    fontFamily: "'SF Mono', 'Consolas', 'Monaco', monospace",
+  },
+  '.cm-content': {
+    caretColor: '#c9a66b',
+  },
+  '.cm-cursor': {
+    borderLeftColor: '#c9a66b',
+  },
+  '&.cm-focused .cm-selectionBackground, .cm-selectionBackground': {
+    backgroundColor: 'rgba(201, 166, 107, 0.15) !important',
+  },
+  '.cm-activeLine': {
+    backgroundColor: 'rgba(201, 166, 107, 0.05)',
+  },
+  '.cm-gutters': {
+    backgroundColor: '#0d0c0a',
+    borderRight: 'none',
+  },
+  '.cm-lineNumbers .cm-gutterElement': {
+    color: '#3a3830',
+  },
+  '.cm-activeLineGutter': {
+    backgroundColor: 'rgba(201, 166, 107, 0.05)',
+  },
+  '.cm-matchingBracket': {
+    backgroundColor: 'rgba(201, 166, 107, 0.2)',
+    outline: 'none',
+  },
+}, { dark: true });
+
 // Initialize CodeMirror
 editor = new EditorView({
   doc: defaultCode,
@@ -219,6 +257,7 @@ editor = new EditorView({
     basicSetup,
     javascript({ typescript: true }),
     oneDark,
+    geoTheme,
     editorHighlights,
     EditorView.updateListener.of((update) => {
       if (update.docChanged) {
@@ -233,10 +272,6 @@ editor = new EditorView({
           updateSeqInfo(editor, code);
         }, DEBOUNCE_MS);
       }
-    }),
-    EditorView.theme({
-      '&': { height: '100%' },
-      '.cm-scroller': { overflow: 'auto' },
     }),
   ],
   parent: document.getElementById('editor')!,
@@ -326,7 +361,7 @@ function drawSignalCanvas(): void {
   const w = canvas.offsetWidth;
   const h = canvas.offsetHeight;
 
-  ctx.fillStyle = '#0a0a0a';
+  ctx.fillStyle = '#0d0c0a';
   ctx.fillRect(0, 0, w, h);
 
   if (signalHistory.length < 2) return;
@@ -339,7 +374,8 @@ function drawSignalCanvas(): void {
 
   // Each stream gets its own horizontal lane
   const laneHeight = h / numStreams;
-  const colors = ['#4ecdc4', '#ff6b6b', '#ffe66d', '#95e1d3'];
+  // Geological palette: ochre, rust, warm sand, sage
+  const colors = ['#c9a66b', '#b35d4b', '#d4c4a8', '#8a9a7b'];
 
   streamNames.forEach((name, laneIdx) => {
     const laneTop = laneIdx * laneHeight;
@@ -347,7 +383,7 @@ function drawSignalCanvas(): void {
     const color = colors[laneIdx % colors.length];
 
     // Draw lane separator
-    ctx.strokeStyle = '#222';
+    ctx.strokeStyle = '#1a1914';
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(0, laneBottom);
@@ -355,7 +391,7 @@ function drawSignalCanvas(): void {
     ctx.stroke();
 
     // Draw stream name
-    ctx.fillStyle = '#444';
+    ctx.fillStyle = '#5a564e';
     ctx.font = '10px monospace';
     ctx.fillText(name, 5, laneTop + 12);
 
@@ -363,7 +399,7 @@ function drawSignalCanvas(): void {
     const padding = laneHeight * 0.15;
 
     // Draw subtle trigger markers first (behind sawtooth)
-    ctx.strokeStyle = '#333';
+    ctx.strokeStyle = '#2a2820';
     ctx.lineWidth = 1;
     for (let i = 0; i < signalHistory.length; i++) {
       const entry = signalHistory[i];
@@ -412,9 +448,9 @@ function drawSignalCanvas(): void {
     ctx.stroke();
   });
 
-  // Draw playhead
-  ctx.strokeStyle = '#fff';
-  ctx.lineWidth = 2;
+  // Draw playhead — subtle ochre
+  ctx.strokeStyle = '#8a857a';
+  ctx.lineWidth = 1;
   const playheadX = ((signalHistory.length - 1) / (MAX_HISTORY - 1)) * w;
   ctx.beginPath();
   ctx.moveTo(playheadX, 0);
