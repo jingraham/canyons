@@ -372,7 +372,20 @@ export const instruments: Record<string, InstrumentPlayer> = {
   pluckBass,
 };
 
+// Track warned instruments to avoid spamming console
+const warnedInstruments = new Set<string>();
+
 /** Get an instrument by name, fallback to sine */
 export function getInstrument(name: string): InstrumentPlayer {
-  return instruments[name] || sine;
+  if (!instruments[name]) {
+    if (!warnedInstruments.has(name)) {
+      warnedInstruments.add(name);
+      console.warn(
+        `[canyons] Unknown instrument "${name}", falling back to "sine". ` +
+        `Available: ${Object.keys(instruments).join(', ')}`
+      );
+    }
+    return sine;
+  }
+  return instruments[name];
 }

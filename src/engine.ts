@@ -69,7 +69,6 @@ registerProcessor('tick-processor', TickProcessor);
 class Engine {
   private streams = new Map<string, Stream>();
   private running = false;
-  private startTime = 0;
   private intervalId: number | null = null;
   private audioCtx: AudioContext | null = null;
 
@@ -78,9 +77,13 @@ class Engine {
   private workletReady = false;
   private useWorklet = true;
 
-  // Time offset for seeking (worklet time + offset = actual time)
+  // Timing: use AudioContext.currentTime as source of truth
+  // audioStartTime = audioCtx.currentTime when engine started
+  // timeOffset = adjustment for seeking
+  // Logical time = (audioCtx.currentTime - audioStartTime) + timeOffset
+  private audioStartTime = 0;
   private timeOffset = 0;
-  private lastWorkletTime = 0;
+  private lastTickTime = 0;
 
   // Track active notes per stream for gate handling
   private activeNotes = new Map<string, ActiveNote[]>();
@@ -164,11 +167,34 @@ class Engine {
 
   /** Stop and remove a stream */
   stop(name: string): void {
+    // Send note-offs for any active notes
+    const activeNotes = this.activeNotes.get(name);
+    if (activeNotes) {
+      const midiReady = midi.isReady();
+      for (const active of activeNotes) {
+        internalSynth.noteOff(name, active.note);
+        if (midiReady) {
+          midi.noteOff(name, active.note);
+        }
+      }
+    }
+    this.activeNotes.delete(name);
     this.streams.delete(name);
   }
 
   /** Stop all streams */
   hush(): void {
+    // Send note-offs for all active notes
+    const midiReady = midi.isReady();
+    for (const [name, activeNotes] of this.activeNotes) {
+      for (const active of activeNotes) {
+        internalSynth.noteOff(name, active.note);
+        if (midiReady) {
+          midi.noteOff(name, active.note);
+        }
+      }
+    }
+    this.activeNotes.clear();
     this.streams.clear();
   }
 
@@ -227,11 +253,6 @@ class Engine {
     }
   }
 
-  /** Convert MIDI note to frequency */
-  midiToFreq(midi: number): number {
-    return 440 * Math.pow(2, (midi - 69) / 12);
-  }
-
   /** Start the engine */
   async start(): Promise<void> {
     if (this.running) return;
@@ -248,9 +269,9 @@ class Engine {
     }
 
     this.running = true;
-    this.startTime = performance.now();
+    this.audioStartTime = ctx.currentTime;
     this.timeOffset = 0;
-    this.lastWorkletTime = 0;
+    this.lastTickTime = 0;
 
     // Reset all streams and active notes
     for (const stream of this.streams.values()) {
@@ -271,9 +292,13 @@ class Engine {
       // Start the worklet clock
       this.workletNode.port.postMessage({ type: 'start' });
     } else {
-      // Fallback to setInterval
+      // Fallback to setInterval (use audio time for consistency)
       this.intervalId = window.setInterval(() => {
-        this.tick(this.currentTime());
+        if (this.audioCtx) {
+          // Pass raw elapsed audio time; tick() applies timeOffset
+          const rawTime = this.audioCtx.currentTime - this.audioStartTime;
+          this.tick(rawTime);
+        }
       }, this.fallbackTickMs);
     }
   }
@@ -304,23 +329,26 @@ class Engine {
     return this.running;
   }
 
-  /** Get current time in seconds */
+  /** Get current time in seconds (uses AudioContext for consistency) */
   currentTime(): number {
-    if (!this.running) return 0;
-    return (performance.now() - this.startTime) / 1000;
+    if (!this.running || !this.audioCtx) return 0;
+    return (this.audioCtx.currentTime - this.audioStartTime) + this.timeOffset;
   }
 
   /** Seek to a specific time in seconds */
   seekTo(targetTime: number): void {
-    // Calculate offset so that worklet time + offset = target time
-    this.timeOffset = targetTime - this.lastWorkletTime;
+    if (!this.audioCtx) return;
 
-    // Also adjust startTime for currentTime() calls
-    this.startTime = performance.now() - targetTime * 1000;
+    // Calculate offset to achieve target logical time
+    // Logical time = (audioCtx.currentTime - audioStartTime) + timeOffset
+    // targetTime = (audioCtx.currentTime - audioStartTime) + newOffset
+    // newOffset = targetTime - (audioCtx.currentTime - audioStartTime)
+    const elapsed = this.audioCtx.currentTime - this.audioStartTime;
+    this.timeOffset = targetTime - elapsed;
 
     // Immediately process this time for responsive scrubbing
     if (this.running) {
-      this.tick(this.lastWorkletTime);
+      this.tick(this.lastTickTime);
     }
   }
 
@@ -328,8 +356,8 @@ class Engine {
   private tick(rawTime: number): void {
     if (!this.running) return;
 
-    // Store raw worklet time and apply offset
-    this.lastWorkletTime = rawTime;
+    // Store raw time and apply offset for logical time
+    this.lastTickTime = rawTime;
     const t = rawTime + this.timeOffset;
 
     const states = new Map<string, StreamState>();

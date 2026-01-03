@@ -1,21 +1,24 @@
 /**
- * canyons — Phase 3: Live Coding Environment
+ * canyons — Live Coding Environment
+ *
+ * This is the application entry point. It wires together:
+ * - Editor (CodeMirror)
+ * - Evaluator (sandboxed code execution)
+ * - Visualization (stream and signal display)
+ * - Engine callbacks
+ * - UI bindings
  */
 
-import { EditorView, basicSetup } from 'codemirror';
-import { javascript } from '@codemirror/lang-javascript';
-import { oneDark } from '@codemirror/theme-one-dark';
-import {
-  T, seq, _, engine, midi, stop, hush,
-  bpm, hz, swell, attack, decay, legato, stacc, tenuto,
-  breath, vibrato, crescendo, decrescendo, onBeat, offBeat
-} from './index';
+import { engine, midi } from './index';
 import { Signal } from './signal';
-import type { StreamState } from './stream';
+import { createEditor, setEditorContent } from './ui/editor';
+import { Visualizer } from './ui/viz';
+import { evaluateCode } from './evaluator';
 import {
-  editorHighlights, updateHighlights, updateSeqInfo, updateSignalPlots,
+  updateHighlights, updateSeqInfo, updateSignalPlots,
   parseConstPositions, registerSignal, clearSignalRegistry, rebuildSignalPlots
 } from './editor-highlights';
+import type { EditorView } from 'codemirror';
 
 // --- Examples ---
 
@@ -77,13 +80,11 @@ const rezCurve = barPhase.mul(2).sub(1).abs().mul(-1).add(1);  // peak at 0.5
 const rez = rezCurve.mul(0.6).add(0.3);  // 0.3 to 0.9
 
 // === The 303 Line ===
-// Minor pentatonic: C Eb F G Bb (C2 range)
-// C2=36, Eb2=39, F2=41, G2=43, Bb2=46
 const bassline = [
-  36, 36, 36, 39,  // root × 3, minor 3rd
-  36, 36, 41, 39,  // root × 2, 4th, minor 3rd
-  36, 43, 41, 39,  // root, 5th, 4th, minor 3rd
-  46, 43, 39, 37,  // flat 7, 5th, minor 3rd, chromatic tension
+  36, 36, 36, 39,
+  36, 36, 41, 39,
+  36, 43, 41, 39,
+  46, 43, 39, 37,
 ];
 
 seq(bassline)
@@ -91,12 +92,11 @@ seq(bassline)
   .vel(p => attack(p).mul(0.3).add(0.6))
   .gate(p => p.lt(0.65))
   .pressure(filterMod)
-  .slide(p => rez.add(swell(p).mul(0.3)))  // extra resonance swell per note
+  .slide(p => rez.add(swell(p).mul(0.3)))
   .inst('saw')
   .as('acid');
 
 // === Kick ===
-// Hard-hitting four-on-the-floor
 seq([36, 36, 36, 36])
   .drive(beat)
   .vel(1.0)
@@ -104,9 +104,7 @@ seq([36, 36, 36, 36])
   .as('kick');
 
 // === Hi-hats ===
-// 16th notes with flowing groove velocity
-// Emphasize 1, 5, 9, 13 (downbeats) and ghost the others
-const hatGroove = sixteenth.mod(4).div(4);  // 0, 0.25, 0.5, 0.75 pattern
+const hatGroove = sixteenth.mod(4).div(4);
 const hatVel = p => hatGroove.mul(-0.4).add(0.7).add(swell(p).mul(0.2));
 
 seq([42, 42, 42, 42, 42, 42, 42, 42])
@@ -117,7 +115,6 @@ seq([42, 42, 42, 42, 42, 42, 42, 42])
   .as('hats');
 
 // === Clap ===
-// On 2 and 4
 seq([_, 39, _, 39])
   .drive(beat)
   .vel(0.8)
@@ -185,210 +182,20 @@ app.innerHTML = `
   </div>
 `;
 
-// --- Code Editor ---
+// --- State ---
 
 const defaultCode = examples.glass.code;
-
 let lastGoodCode = defaultCode;
 let editor: EditorView;
-let evalTimeout: number | null = null;
-const DEBOUNCE_MS = 500;
 
-/** Extract const names from code */
-function extractConstNames(code: string): string[] {
-  const names: string[] = [];
-  const regex = /const\s+(\w+)\s*=/g;
-  let match;
-  while ((match = regex.exec(code)) !== null) {
-    names.push(match[1]);
-  }
-  return names;
-}
+// --- Visualization ---
 
-/** Wrap code to return all const values for signal detection */
-function wrapCodeForSignalDetection(code: string, constNames: string[]): string {
-  if (constNames.length === 0) return code;
-  const returnObj = constNames.map(n => `${n}: typeof ${n} !== 'undefined' ? ${n} : undefined`).join(', ');
-  return `${code}\nreturn { ${returnObj} };`;
-}
+const visualizer = new Visualizer(
+  document.getElementById('signalCanvas') as HTMLCanvasElement,
+  document.getElementById('streamsContainer')!
+);
 
-/** Register detected signals and rebuild plots */
-function registerDetectedSignals(code: string, values: Record<string, unknown>): void {
-  clearSignalRegistry();
-  const positions = parseConstPositions(code);
-
-  for (const [name, value] of Object.entries(values)) {
-    if (value instanceof Signal) {
-      const lineEnd = positions.get(name);
-      if (lineEnd !== undefined) {
-        registerSignal(name, value, lineEnd);
-      }
-    }
-  }
-
-  // Trigger decoration rebuild
-  editor.dispatch({ effects: rebuildSignalPlots.of(undefined) });
-}
-
-// Create a function that evaluates code with canyons primitives in scope
-function evalCode(code: string): void {
-  const errorPanel = document.getElementById('errorPanel')!;
-  const statusEl = document.getElementById('status')!;
-
-  try {
-    // Hot reload: mark start of eval cycle
-    engine.beginHotReload();
-
-    // Extract const names for signal detection
-    const constNames = extractConstNames(code);
-    const wrappedCode = wrapCodeForSignalDetection(code, constNames);
-
-    // Create a function with all canyons primitives in scope
-    const fn = new Function(
-      'T', 'seq', '_', 'engine', 'midi', 'stop', 'hush',
-      'bpm', 'hz', 'swell', 'attack', 'decay', 'legato', 'stacc', 'tenuto',
-      'breath', 'vibrato', 'crescendo', 'decrescendo', 'onBeat', 'offBeat',
-      wrappedCode
-    );
-    const result = fn(
-      T, seq, _, engine, midi, stop, hush,
-      bpm, hz, swell, attack, decay, legato, stacc, tenuto,
-      breath, vibrato, crescendo, decrescendo, onBeat, offBeat
-    );
-
-    // Hot reload: remove streams that weren't re-registered
-    engine.endHotReload();
-
-    // Register any Signals for plotting
-    if (result && typeof result === 'object') {
-      registerDetectedSignals(code, result);
-    }
-
-    // Success!
-    lastGoodCode = code;
-    errorPanel.textContent = '';
-    errorPanel.classList.remove('visible');
-    statusEl.textContent = 'OK';
-    statusEl.classList.remove('error');
-    statusEl.classList.add('ok');
-
-    // Engine keeps running - no restart needed for hot reload!
-  } catch (e) {
-    // Show error but keep running last good code
-    const err = e as Error;
-    errorPanel.textContent = err.message;
-    errorPanel.classList.add('visible');
-    statusEl.textContent = 'Error';
-    statusEl.classList.add('error');
-    statusEl.classList.remove('ok');
-
-    // Re-evaluate last good code (also using hot reload)
-    // But clear signal plots since positions won't match current document
-    clearSignalRegistry();
-    editor.dispatch({ effects: rebuildSignalPlots.of(undefined) });
-
-    try {
-      engine.beginHotReload();
-      const constNames = extractConstNames(lastGoodCode);
-      const wrappedCode = wrapCodeForSignalDetection(lastGoodCode, constNames);
-      const fn = new Function(
-        'T', 'seq', '_', 'engine', 'midi', 'stop', 'hush',
-        'bpm', 'hz', 'swell', 'attack', 'decay', 'legato', 'stacc', 'tenuto',
-        'breath', 'vibrato', 'crescendo', 'decrescendo', 'onBeat', 'offBeat',
-        wrappedCode
-      );
-      const result = fn(
-        T, seq, _, engine, midi, stop, hush,
-        bpm, hz, swell, attack, decay, legato, stacc, tenuto,
-        breath, vibrato, crescendo, decrescendo, onBeat, offBeat
-      );
-      engine.endHotReload();
-      // Don't register signals on error - positions don't match current document
-    } catch {
-      // Last good code also failed - shouldn't happen
-    }
-  }
-}
-
-// Geological theme overrides for CodeMirror
-const geoTheme = EditorView.theme({
-  '&': {
-    height: '100%',
-    backgroundColor: '#0d0c0a',
-  },
-  '.cm-scroller': {
-    overflow: 'auto',
-    fontFamily: "'SF Mono', 'Consolas', 'Monaco', monospace",
-  },
-  '.cm-content': {
-    caretColor: '#c9a66b',
-  },
-  '.cm-cursor': {
-    borderLeftColor: '#c9a66b',
-  },
-  '&.cm-focused .cm-selectionBackground, .cm-selectionBackground': {
-    backgroundColor: 'rgba(201, 166, 107, 0.15) !important',
-  },
-  '.cm-activeLine': {
-    backgroundColor: 'rgba(201, 166, 107, 0.05)',
-  },
-  '.cm-gutters': {
-    backgroundColor: '#0d0c0a',
-    borderRight: 'none',
-  },
-  '.cm-lineNumbers .cm-gutterElement': {
-    color: '#3a3830',
-  },
-  '.cm-activeLineGutter': {
-    backgroundColor: 'rgba(201, 166, 107, 0.05)',
-  },
-  '.cm-matchingBracket': {
-    backgroundColor: 'rgba(201, 166, 107, 0.2)',
-    outline: 'none',
-  },
-}, { dark: true });
-
-// Initialize CodeMirror
-editor = new EditorView({
-  doc: defaultCode,
-  extensions: [
-    basicSetup,
-    javascript({ typescript: true }),
-    oneDark,
-    geoTheme,
-    editorHighlights,
-    EditorView.updateListener.of((update) => {
-      if (update.docChanged) {
-        // Debounce evaluation
-        if (evalTimeout !== null) {
-          clearTimeout(evalTimeout);
-        }
-        evalTimeout = window.setTimeout(() => {
-          const code = update.state.doc.toString();
-          evalCode(code);
-          // Update sequence position info for highlighting
-          updateSeqInfo(editor, code);
-        }, DEBOUNCE_MS);
-      }
-    }),
-  ],
-  parent: document.getElementById('editor')!,
-});
-
-// Initial evaluation and sequence parsing
-evalCode(defaultCode);
-updateSeqInfo(editor, defaultCode);
-
-// --- Visualization State ---
-
-interface HistoryEntry {
-  t: number;
-  streams: Map<string, StreamState>;
-  triggers: Set<string>; // accumulated triggers since last viz frame
-}
-
-const signalHistory: HistoryEntry[] = [];
-const MAX_HISTORY = 200;
+// --- Logging ---
 
 function log(message: string, isTrigger = false): void {
   const logEl = document.getElementById('logEntries')!;
@@ -403,158 +210,72 @@ function log(message: string, isTrigger = false): void {
   }
 }
 
-function updateStreamViz(): void {
-  const container = document.getElementById('streamsContainer')!;
-  const streams = engine.getStreams();
+// --- Code Evaluation ---
 
-  for (const [name, stream] of streams) {
-    let el = document.getElementById(`stream-${name}`);
-    if (!el) {
-      el = document.createElement('div');
-      el.id = `stream-${name}`;
-      el.className = 'stream-viz';
-      container.appendChild(el);
+function registerDetectedSignals(code: string, values: Record<string, unknown>): void {
+  clearSignalRegistry();
+  const positions = parseConstPositions(code);
+
+  for (const [name, value] of Object.entries(values)) {
+    if (value instanceof Signal) {
+      const lineEnd = positions.get(name);
+      if (lineEnd !== undefined) {
+        registerSignal(name, value, lineEnd);
+      }
     }
-
-    const latest = signalHistory.length > 0
-      ? signalHistory[signalHistory.length - 1].streams.get(name)
-      : null;
-
-    const noteCells = stream.values.map((v, i) => {
-      const isActive = latest && latest.index === i;
-      const isRest = v === null;
-      const display = isRest ? '_' : (Array.isArray(v) ? v.join(',') : v);
-      return `<div class="note-cell ${isActive ? 'active' : ''} ${isRest ? 'rest' : ''}">${display}</div>`;
-    }).join('');
-
-    el.innerHTML = `
-      <h2>${name}</h2>
-      <div class="stream-notes">${noteCells}</div>
-      <div class="stream-info">
-        driver: <span>${latest ? latest.driverValue.toFixed(2) : '-'}</span> |
-        floor: <span>${latest ? latest.currentFloor : '-'}</span> |
-        phase: <span>${latest ? latest.phase.toFixed(2) : '-'}</span> |
-        vel: <span>${latest ? latest.velocity.toFixed(2) : '-'}</span>
-      </div>
-    `;
   }
 
-  // Remove stale
-  for (const child of [...container.children]) {
-    const name = child.id.replace('stream-', '');
-    if (!streams.has(name)) {
-      container.removeChild(child);
+  editor.dispatch({ effects: rebuildSignalPlots.of(undefined) });
+}
+
+function evalCode(code: string): void {
+  const errorPanel = document.getElementById('errorPanel')!;
+  const statusEl = document.getElementById('status')!;
+
+  const result = evaluateCode(code);
+
+  if (result.success) {
+    lastGoodCode = code;
+    errorPanel.textContent = '';
+    errorPanel.classList.remove('visible');
+    statusEl.textContent = 'OK';
+    statusEl.classList.remove('error');
+    statusEl.classList.add('ok');
+
+    if (result.values) {
+      registerDetectedSignals(code, result.values);
     }
+  } else {
+    // Show error but keep running last good code
+    errorPanel.textContent = result.error?.message ?? 'Unknown error';
+    errorPanel.classList.add('visible');
+    statusEl.textContent = 'Error';
+    statusEl.classList.add('error');
+    statusEl.classList.remove('ok');
+
+    // Clear signal plots since positions won't match current document
+    clearSignalRegistry();
+    editor.dispatch({ effects: rebuildSignalPlots.of(undefined) });
+
+    // Re-evaluate last good code
+    evaluateCode(lastGoodCode);
   }
 }
 
-function drawSignalCanvas(): void {
-  const canvas = document.getElementById('signalCanvas') as HTMLCanvasElement;
-  const ctx = canvas.getContext('2d')!;
+// --- Editor Setup ---
 
-  canvas.width = canvas.offsetWidth * 2;
-  canvas.height = canvas.offsetHeight * 2;
-  ctx.scale(2, 2);
+editor = createEditor({
+  parent: document.getElementById('editor')!,
+  initialCode: defaultCode,
+  onChange: (code) => {
+    evalCode(code);
+    updateSeqInfo(editor, code);
+  },
+});
 
-  const w = canvas.offsetWidth;
-  const h = canvas.offsetHeight;
-
-  ctx.fillStyle = '#0d0c0a';
-  ctx.fillRect(0, 0, w, h);
-
-  if (signalHistory.length < 2) return;
-
-  const streams = engine.getStreams();
-  const streamNames = [...streams.keys()];
-  const numStreams = streamNames.length;
-
-  if (numStreams === 0) return;
-
-  // Each stream gets its own horizontal lane
-  const laneHeight = h / numStreams;
-  // Geological palette: ochre, rust, warm sand, sage
-  const colors = ['#c9a66b', '#b35d4b', '#d4c4a8', '#8a9a7b'];
-
-  streamNames.forEach((name, laneIdx) => {
-    const laneTop = laneIdx * laneHeight;
-    const laneBottom = laneTop + laneHeight;
-    const color = colors[laneIdx % colors.length];
-
-    // Draw lane separator
-    ctx.strokeStyle = '#1a1914';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(0, laneBottom);
-    ctx.lineTo(w, laneBottom);
-    ctx.stroke();
-
-    // Draw stream name
-    ctx.fillStyle = '#5a564e';
-    ctx.font = '10px monospace';
-    ctx.fillText(name, 5, laneTop + 12);
-
-    // Lane padding (same for sawtooth and trigger lines)
-    const padding = laneHeight * 0.15;
-
-    // Draw subtle trigger markers first (behind sawtooth)
-    ctx.strokeStyle = '#2a2820';
-    ctx.lineWidth = 1;
-    for (let i = 0; i < signalHistory.length; i++) {
-      const entry = signalHistory[i];
-      if (entry.triggers.has(name)) {
-        const x = (i / (MAX_HISTORY - 1)) * w;
-        ctx.beginPath();
-        ctx.moveTo(x, laneTop + padding);
-        ctx.lineTo(x, laneBottom - padding);
-        ctx.stroke();
-      }
-    }
-
-    // Draw phase line (sawtooth pattern, 0-1)
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-
-    let first = true;
-    let lastPhase = 0;
-
-    for (let i = 0; i < signalHistory.length; i++) {
-      const state = signalHistory[i].streams.get(name);
-      if (!state) continue;
-
-      const x = (i / (MAX_HISTORY - 1)) * w;
-      const phase = state.phase;
-
-      // Map phase 0-1 to lane
-      const y = laneBottom - padding - (phase * (laneHeight - 2 * padding));
-
-      // Detect phase wrap (trigger) - don't draw line across reset
-      if (first) {
-        ctx.moveTo(x, y);
-        first = false;
-      } else if (phase < lastPhase - 0.5) {
-        // Phase wrapped, start new line segment
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.moveTo(x, y);
-      } else {
-        ctx.lineTo(x, y);
-      }
-
-      lastPhase = phase;
-    }
-    ctx.stroke();
-  });
-
-  // Draw playhead — subtle ochre
-  ctx.strokeStyle = '#8a857a';
-  ctx.lineWidth = 1;
-  const playheadX = ((signalHistory.length - 1) / (MAX_HISTORY - 1)) * w;
-  ctx.beginPath();
-  ctx.moveTo(playheadX, 0);
-  ctx.lineTo(playheadX, h);
-  ctx.stroke();
-}
+// Initial evaluation
+evalCode(defaultCode);
+updateSeqInfo(editor, defaultCode);
 
 // --- Engine Callbacks ---
 
@@ -562,29 +283,27 @@ engine.setNoteCallback((event) => {
   log(`NOTE ON ${event.note} (${event.stream}) vel=${event.velocity.toFixed(2)}`, true);
 });
 
+const timeScrubber = document.getElementById('timeScrubber') as HTMLInputElement;
+let isScrubbing = false;
+
 engine.setTickCallback((t, states, triggers) => {
-  // Update time display (always) and scrubber (only if not being dragged)
+  // Update time display and scrubber
   document.getElementById('timeDisplay')!.textContent = t.toFixed(2);
   if (!isScrubbing) {
     timeScrubber.value = String(Math.min(t, 60));
   }
 
-  // Store history with triggers from engine
-  signalHistory.push({ t, streams: new Map(states), triggers });
-  if (signalHistory.length > MAX_HISTORY) signalHistory.shift();
+  // Update visualization
+  visualizer.push({ t, streams: new Map(states), triggers });
+  visualizer.updateStreamViz(engine.getStreams());
+  visualizer.drawSignalCanvas(engine.getStreams());
 
-  // Update viz
-  updateStreamViz();
-  drawSignalCanvas();
-
-  // Update editor highlights with active indices
+  // Update editor highlights
   const activeIndices = new Map<string, number>();
   for (const [name, state] of states) {
     activeIndices.set(name, state.index);
   }
   updateHighlights(editor, activeIndices);
-
-  // Update signal plot playheads
   updateSignalPlots(t);
 });
 
@@ -594,7 +313,7 @@ const playBtn = document.getElementById('playBtn')!;
 const stopBtn = document.getElementById('stopBtn')!;
 
 playBtn.addEventListener('click', () => {
-  signalHistory.length = 0;
+  visualizer.clear();
   document.getElementById('logEntries')!.innerHTML = '';
   log('Engine started');
   engine.start();
@@ -609,35 +328,16 @@ stopBtn.addEventListener('click', () => {
 
 // --- Scrubber ---
 
-const timeScrubber = document.getElementById('timeScrubber') as HTMLInputElement;
-let isScrubbing = false;
-
-timeScrubber.addEventListener('mousedown', () => {
-  isScrubbing = true;
-});
-
-timeScrubber.addEventListener('touchstart', () => {
-  isScrubbing = true;
-});
-
-timeScrubber.addEventListener('mouseup', () => {
-  isScrubbing = false;
-});
-
-timeScrubber.addEventListener('touchend', () => {
-  isScrubbing = false;
-});
-
-// Also handle mouse leaving the scrubber while dragging
-document.addEventListener('mouseup', () => {
-  isScrubbing = false;
-});
+timeScrubber.addEventListener('mousedown', () => { isScrubbing = true; });
+timeScrubber.addEventListener('touchstart', () => { isScrubbing = true; });
+timeScrubber.addEventListener('mouseup', () => { isScrubbing = false; });
+timeScrubber.addEventListener('touchend', () => { isScrubbing = false; });
+document.addEventListener('mouseup', () => { isScrubbing = false; });
 
 timeScrubber.addEventListener('input', () => {
   const t = parseFloat(timeScrubber.value);
   engine.seekTo(t);
-  // Clear history when scrubbing to avoid stale visualization
-  signalHistory.length = 0;
+  visualizer.clear();
 });
 
 // --- MIDI Setup ---
@@ -646,13 +346,9 @@ const midiSelect = document.getElementById('midiSelect') as HTMLSelectElement;
 
 function updateMidiDevices() {
   const devices = midi.getDevices();
-
-  // Clear existing options except "None"
   while (midiSelect.options.length > 1) {
     midiSelect.remove(1);
   }
-
-  // Add device options
   for (const device of devices) {
     const option = document.createElement('option');
     option.value = device.id;
@@ -673,14 +369,10 @@ midiSelect.addEventListener('change', () => {
   }
 });
 
-// Initialize MIDI
 midi.init().then((success) => {
   if (success) {
     updateMidiDevices();
     midi.setDevicesChangedCallback(updateMidiDevices);
-    console.log('WebMIDI initialized');
-  } else {
-    console.log('WebMIDI not available');
   }
 });
 
@@ -692,27 +384,11 @@ exampleSelect.addEventListener('change', () => {
   const exampleId = exampleSelect.value;
   if (exampleId && examples[exampleId]) {
     const example = examples[exampleId];
-
-    // Cancel any pending debounced eval to avoid redundant widget recreation
-    if (evalTimeout !== null) {
-      clearTimeout(evalTimeout);
-      evalTimeout = null;
-    }
-
-    // Update editor content
-    editor.dispatch({
-      changes: {
-        from: 0,
-        to: editor.state.doc.length,
-        insert: example.code,
-      },
-    });
-    // Trigger evaluation
+    setEditorContent(editor, example.code);
     evalCode(example.code);
     updateSeqInfo(editor, example.code);
     log(`Loaded example: ${example.name}`);
   }
-  // Reset dropdown to "Examples" label
   exampleSelect.value = '';
 });
 
@@ -754,7 +430,4 @@ _                         // null (skip note)
 
 document.getElementById('preludeCode')!.textContent = preludeCode;
 
-console.log('canyons Phase 3 — Live Coding Environment');
-console.log('=========================================');
-console.log('Edit code on the left. Changes auto-reload after 500ms.');
-console.log('Errors preserve last working code.');
+console.log('canyons — Live Coding Environment');

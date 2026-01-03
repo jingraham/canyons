@@ -381,6 +381,7 @@ class InternalSynth {
   private voices: InternalVoice[] = [];
   private nextChannel = 1;
   private readonly maxVoices = 16;
+  private warnedInstruments = new Set<string>();
 
   /** Set the audio context */
   setAudioContext(ctx: AudioContext): void {
@@ -405,6 +406,21 @@ class InternalSynth {
     if (this.voices.length >= this.maxVoices) {
       const oldest = this.voices.shift();
       oldest?.release();
+    }
+
+    // Known instruments for this synth
+    const knownInstruments = [
+      'sine', 'saw', 'square', 'triangle', 'piano', 'epiano',
+      'kick', 'snare', 'hihat', 'pluck', 'pluckBass'
+    ];
+
+    // Warn once per unknown instrument
+    if (!knownInstruments.includes(instrument) && !this.warnedInstruments.has(instrument)) {
+      this.warnedInstruments.add(instrument);
+      console.warn(
+        `[canyons] Unknown instrument "${instrument}", falling back to "sine". ` +
+        `Available: ${knownInstruments.join(', ')}`
+      );
     }
 
     // Create appropriate voice type

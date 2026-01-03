@@ -47,7 +47,6 @@ export class Stream {
 
   // State for integer crossing detection (hysteresis)
   private _lastFloor: number | null = null;
-  private _noteOnTime: number | null = null;
 
   constructor(values: SequenceValue[], driver: Signal) {
     this.values = values;
@@ -106,24 +105,43 @@ export class Stream {
   /** Reset state (called on engine start) */
   reset(): void {
     this._lastFloor = null;
-    this._noteOnTime = null;
   }
 
   /** Transfer internal state from another stream (for hot reload) */
   transferStateFrom(other: Stream): void {
     this._lastFloor = other._lastFloor;
-    this._noteOnTime = other._noteOnTime;
   }
+
+  // Track NaN warnings to avoid spam (one warning per stream)
+  private _warnedNaN = false;
 
   /** Evaluate a modifier value at time t with given phase */
   private evalModifier(mod: ModifierValue | null, t: number, phase: number, defaultVal: number): number {
     if (mod === null) return defaultVal;
-    if (typeof mod === 'number') return mod;
-    if (mod instanceof Signal) return mod.eval(t);
-    // It's a phase function
-    const phaseSignal = new Signal(() => phase);
-    const result = mod(phaseSignal);
-    return result instanceof Signal ? result.eval(t) : result;
+
+    let value: number;
+    if (typeof mod === 'number') {
+      value = mod;
+    } else if (mod instanceof Signal) {
+      value = mod.eval(t);
+    } else {
+      // It's a phase function
+      const phaseSignal = new Signal(() => phase);
+      const result = mod(phaseSignal);
+      value = result instanceof Signal ? result.eval(t) : result;
+    }
+
+    // Warn on NaN (once per stream to avoid spam)
+    if (Number.isNaN(value) && !this._warnedNaN) {
+      this._warnedNaN = true;
+      console.warn(
+        `[canyons] Modifier returned NaN in stream "${this.name ?? '(unnamed)'}". ` +
+        `Check your signal expressions for division by zero or invalid operations.`
+      );
+      return defaultVal;
+    }
+
+    return Number.isNaN(value) ? defaultVal : value;
   }
 
   /** Tick the stream at time t, returns current state */
@@ -142,7 +160,6 @@ export class Stream {
     let trigger = false;
     if (this._lastFloor !== null && currentFloor !== this._lastFloor && !masked) {
       trigger = true;
-      this._noteOnTime = t;
     }
     this._lastFloor = currentFloor;
 
@@ -151,7 +168,7 @@ export class Stream {
 
     // Calculate gate
     let gateOpen = true;
-    if (this._gate !== null && this._noteOnTime !== null) {
+    if (this._gate !== null) {
       const phaseSignal = new Signal(() => phase);
       const gateSignal = this._gate(phaseSignal);
       gateOpen = (gateSignal instanceof Signal ? gateSignal.eval(t) : gateSignal) >= 0.5;

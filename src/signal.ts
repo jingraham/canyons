@@ -18,35 +18,35 @@ export class Signal {
     return this._fn(t);
   }
 
+  /** Helper: resolve number | Signal to a value at time t */
+  private static toVal(x: number | Signal, t: number): number {
+    return x instanceof Signal ? x.eval(t) : x;
+  }
+
   // --- Arithmetic ---
 
   mul(x: number | Signal): Signal {
-    const xFn = x instanceof Signal ? (t: number) => x.eval(t) : () => x;
-    return new Signal((t) => this.eval(t) * xFn(t));
+    return new Signal((t) => this.eval(t) * Signal.toVal(x, t));
   }
 
   div(x: number | Signal): Signal {
-    const xFn = x instanceof Signal ? (t: number) => x.eval(t) : () => x;
-    return new Signal((t) => this.eval(t) / xFn(t));
+    return new Signal((t) => this.eval(t) / Signal.toVal(x, t));
   }
 
   add(x: number | Signal): Signal {
-    const xFn = x instanceof Signal ? (t: number) => x.eval(t) : () => x;
-    return new Signal((t) => this.eval(t) + xFn(t));
+    return new Signal((t) => this.eval(t) + Signal.toVal(x, t));
   }
 
   sub(x: number | Signal): Signal {
-    const xFn = x instanceof Signal ? (t: number) => x.eval(t) : () => x;
-    return new Signal((t) => this.eval(t) - xFn(t));
+    return new Signal((t) => this.eval(t) - Signal.toVal(x, t));
   }
 
   // --- Shaping ---
 
   mod(x: number | Signal): Signal {
-    const xFn = x instanceof Signal ? (t: number) => x.eval(t) : () => x;
     return new Signal((t) => {
       const val = this.eval(t);
-      const m = xFn(t);
+      const m = Signal.toVal(x, t);
       return ((val % m) + m) % m; // proper modulo for negatives
     });
   }
@@ -74,33 +74,27 @@ export class Signal {
   // --- Comparison ---
 
   lt(x: number | Signal): Signal {
-    const xFn = x instanceof Signal ? (t: number) => x.eval(t) : () => x;
-    return new Signal((t) => this.eval(t) < xFn(t) ? 1 : 0);
+    return new Signal((t) => this.eval(t) < Signal.toVal(x, t) ? 1 : 0);
   }
 
   gt(x: number | Signal): Signal {
-    const xFn = x instanceof Signal ? (t: number) => x.eval(t) : () => x;
-    return new Signal((t) => this.eval(t) > xFn(t) ? 1 : 0);
+    return new Signal((t) => this.eval(t) > Signal.toVal(x, t) ? 1 : 0);
   }
 
   lte(x: number | Signal): Signal {
-    const xFn = x instanceof Signal ? (t: number) => x.eval(t) : () => x;
-    return new Signal((t) => this.eval(t) <= xFn(t) ? 1 : 0);
+    return new Signal((t) => this.eval(t) <= Signal.toVal(x, t) ? 1 : 0);
   }
 
   gte(x: number | Signal): Signal {
-    const xFn = x instanceof Signal ? (t: number) => x.eval(t) : () => x;
-    return new Signal((t) => this.eval(t) >= xFn(t) ? 1 : 0);
+    return new Signal((t) => this.eval(t) >= Signal.toVal(x, t) ? 1 : 0);
   }
 
   min(x: number | Signal): Signal {
-    const xFn = x instanceof Signal ? (t: number) => x.eval(t) : () => x;
-    return new Signal((t) => Math.min(this.eval(t), xFn(t)));
+    return new Signal((t) => Math.min(this.eval(t), Signal.toVal(x, t)));
   }
 
   max(x: number | Signal): Signal {
-    const xFn = x instanceof Signal ? (t: number) => x.eval(t) : () => x;
-    return new Signal((t) => Math.max(this.eval(t), xFn(t)));
+    return new Signal((t) => Math.max(this.eval(t), Signal.toVal(x, t)));
   }
 
   // --- Clamping shorthand ---
