@@ -12,9 +12,6 @@ export { engine, stop, hush } from './engine';
 // MIDI output
 export { midi } from './midi';
 
-// Instruments
-export { instruments, getInstrument } from './instruments';
-
 // Standard prelude
 export {
   bpm,
@@ -38,4 +35,3 @@ export type { SignalFn } from './signal';
 export type { NoteValue, SequenceValue, PhaseFunction, ModifierValue, StreamState, StreamRegistry } from './stream';
 export type { NoteEvent, NoteCallback } from './engine';
 export type { MidiDevice, ActiveVoice } from './midi';
-export type { InstrumentPlayer } from './instruments';
