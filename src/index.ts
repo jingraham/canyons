@@ -6,7 +6,7 @@
 
 // Core primitives
 export { Signal, T } from './signal';
-export { Stream, seq, _ } from './stream';
+export { Stream, seq, _, setRegistry, getRegistry } from './stream';
 export { engine, stop, hush } from './engine';
 
 // MIDI output
@@ -35,7 +35,7 @@ export {
 
 // Re-export types
 export type { SignalFn } from './signal';
-export type { NoteValue, SequenceValue, PhaseFunction, ModifierValue, StreamState } from './stream';
+export type { NoteValue, SequenceValue, PhaseFunction, ModifierValue, StreamState, StreamRegistry } from './stream';
 export type { NoteEvent, NoteCallback } from './engine';
 export type { MidiDevice, ActiveVoice } from './midi';
 export type { InstrumentPlayer } from './instruments';

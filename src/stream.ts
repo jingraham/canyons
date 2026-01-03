@@ -5,7 +5,27 @@
  */
 
 import { Signal } from './signal';
-import { engine } from './engine';
+
+// --- Registry Pattern (breaks circular dependency with engine) ---
+
+/** Interface for stream registration (implemented by engine) */
+export interface StreamRegistry {
+  register(name: string, stream: Stream): void;
+}
+
+let currentRegistry: StreamRegistry | null = null;
+
+/** Set the active stream registry (called before evaluating user code) */
+export function setRegistry(registry: StreamRegistry | null): void {
+  currentRegistry = registry;
+}
+
+/** Get the current registry (for testing) */
+export function getRegistry(): StreamRegistry | null {
+  return currentRegistry;
+}
+
+// ---
 
 /** Rest marker — null values in sequences are skipped */
 export const _ = null;
@@ -93,7 +113,9 @@ export class Stream {
   /** Register this stream with the engine */
   as(name: string): this {
     this.name = name;
-    engine.register(name, this);
+    if (currentRegistry) {
+      currentRegistry.register(name, this);
+    }
     return this;
   }
 

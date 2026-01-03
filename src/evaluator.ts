@@ -7,6 +7,7 @@ import {
   bpm, hz, swell, attack, decay, legato, stacc, tenuto,
   breath, vibrato, crescendo, decrescendo, onBeat, offBeat
 } from './index';
+import { setRegistry } from './stream';
 
 export interface EvalResult {
   success: boolean;
@@ -38,6 +39,9 @@ function wrapCodeForSignalDetection(code: string, constNames: string[]): string 
  */
 export function evaluateCode(code: string): EvalResult {
   try {
+    // Set up registry so .as() calls register with engine
+    setRegistry(engine);
+
     // Hot reload: mark start of eval cycle
     engine.beginHotReload();
 
