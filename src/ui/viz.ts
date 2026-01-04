@@ -122,7 +122,7 @@ export class Visualizer {
     }
   }
 
-  /** Draw the signal canvas with trigger-focused Guitar Hero-style display */
+  /** Draw the signal canvas with stroboscope-style spinning ruler display */
   drawSignalCanvas(streams: Map<string, Stream>): void {
     const ctx = this.canvas.getContext('2d')!;
 
@@ -136,8 +136,6 @@ export class Visualizer {
     ctx.fillStyle = '#0d0c0a';
     ctx.fillRect(0, 0, w, h);
 
-    if (this.history.length < 2) return;
-
     const streamNames = [...streams.keys()];
     const numStreams = streamNames.length;
 
@@ -146,14 +144,11 @@ export class Visualizer {
     // Each stream gets its own horizontal lane
     const laneHeight = h / numStreams;
 
-    // Calculate x-position for a given absolute history index
-    const historyStartIndex = this.totalHistoryIndex - this.history.length;
-    const xForIndex = (idx: number): number => {
-      const relativeIndex = idx - historyStartIndex;
-      return (relativeIndex / (this.maxHistory - 1)) * w;
-    };
+    // Reference point - where triggers "land"
+    const refX = w / 2;
 
     streamNames.forEach((name, laneIdx) => {
+      const stream = streams.get(name)!;
       const laneTop = laneIdx * laneHeight;
       const laneBottom = laneTop + laneHeight;
       const laneCenter = laneTop + laneHeight / 2;
@@ -161,7 +156,6 @@ export class Visualizer {
 
       // Lane padding
       const padding = laneHeight * 0.15;
-      const signalHeight = laneHeight - 2 * padding;
 
       // Draw lane separator
       ctx.strokeStyle = '#1a1914';
@@ -176,86 +170,93 @@ export class Visualizer {
       ctx.font = '10px monospace';
       ctx.fillText(name, 5, laneTop + 12);
 
-      // 1. Draw muted phase signal centered at 0 (+/-0.5)
-      // Shift so phase=0 (trigger point) maps to center
-      ctx.strokeStyle = this.mutedColor(color, 0.4);
-      ctx.lineWidth = 1;
-      ctx.beginPath();
+      // Get current state from latest history
+      const latest = this.history.length > 0
+        ? this.history[this.history.length - 1].streams.get(name)
+        : null;
 
-      let first = true;
-      let lastShifted = 0;
+      if (!latest) return;
 
-      for (let i = 0; i < this.history.length; i++) {
-        const state = this.history[i].streams.get(name);
-        if (!state) continue;
+      const seqLength = stream.values.length;
+      const driverValue = latest.driverValue;
 
-        const x = (i / (this.maxHistory - 1)) * w;
-        const phase = state.phase;
+      // Scroll position (fractional position within sequence)
+      const scrollPos = driverValue % seqLength;
 
-        // Shift phase so trigger (phase=0) is at center
-        // phase=0 → shifted=0.5 → centered=0
-        // phase=0.5 → shifted=1→0 (wrap) → centered=-0.5 (bottom)
-        const shifted = (phase + 0.5) % 1;
-        const centered = shifted - 0.5;  // -0.5 to +0.5
-        const y = laneCenter - centered * signalHeight;
+      // Bar spacing - show 2 cycles for context
+      const cyclesVisible = 2;
+      const totalBars = seqLength * cyclesVisible;
+      const barSpacing = w / seqLength;  // one cycle = screen width
 
-        // Detect discontinuity (at shifted wrap, which is phase=0.5)
-        if (first) {
-          ctx.moveTo(x, y);
-          first = false;
-        } else if (Math.abs(shifted - lastShifted) > 0.5) {
-          // Discontinuity, start new line segment
-          ctx.stroke();
+      // Draw the scrolling ruler bars
+      for (let cycle = -1; cycle <= cyclesVisible; cycle++) {
+        for (let i = 0; i < seqLength; i++) {
+          const barIndex = cycle * seqLength + i;
+
+          // Distance from current scroll position (in sequence units)
+          const dist = barIndex - scrollPos;
+
+          // Convert to x position (refX is where current position appears)
+          const x = refX + dist * barSpacing;
+
+          // Skip if off screen
+          if (x < -barSpacing || x > w + barSpacing) continue;
+
+          // Determine if this is the "current" bar (just triggered or about to)
+          const isCurrent = Math.abs(dist % seqLength) < 0.1 ||
+                           Math.abs((dist % seqLength) - seqLength) < 0.1;
+
+          // Bar height and style based on note value
+          const noteValue = stream.values[i];
+          const isRest = noteValue === null;
+
+          // Draw the bar
+          if (isRest) {
+            // Subtle dashed line for rests
+            ctx.strokeStyle = this.mutedColor(color, 0.15);
+            ctx.setLineDash([2, 4]);
+          } else {
+            // Solid bar, brighter if current
+            ctx.strokeStyle = isCurrent
+              ? color
+              : this.mutedColor(color, 0.4);
+            ctx.setLineDash([]);
+          }
+
+          ctx.lineWidth = isCurrent ? 2 : 1;
           ctx.beginPath();
-          ctx.moveTo(x, y);
-        } else {
-          ctx.lineTo(x, y);
+          ctx.moveTo(x, laneTop + padding);
+          ctx.lineTo(x, laneBottom - padding);
+          ctx.stroke();
         }
-
-        lastShifted = shifted;
       }
-      ctx.stroke();
 
-      // 2. Draw flat colored trigger line at center (where phase=0 crosses)
-      ctx.strokeStyle = color;
+      ctx.setLineDash([]);
+
+      // Draw fixed reference marker at center
+      ctx.strokeStyle = '#4a4640';
       ctx.lineWidth = 1;
       ctx.beginPath();
-      ctx.moveTo(0, laneCenter);
-      ctx.lineTo(w, laneCenter);
+      ctx.moveTo(refX, laneTop + padding * 0.5);
+      ctx.lineTo(refX, laneTop + padding);
+      ctx.moveTo(refX, laneBottom - padding);
+      ctx.lineTo(refX, laneBottom - padding * 0.5);
       ctx.stroke();
 
-      // 3. Draw trigger dots on the line
-      const dots = this.triggerDots.get(name) || [];
-      for (const dot of dots) {
-        const x = xForIndex(dot.historyIndex);
+      // Draw trigger flash at reference point when trigger just happened
+      const justTriggered = this.history.length > 0 &&
+        this.history[this.history.length - 1].triggers.has(name);
 
-        // Skip dots outside visible area
-        if (x < -10 || x > w + 10) continue;
-
-        // Dot size based on velocity (subtle: 2.5-4px radius)
-        const baseRadius = 2.5;
-        const maxExtra = 1.5;
-        const radius = baseRadius + dot.velocity * maxExtra;
-
-        // Draw filled dot with subtle glow
+      if (justTriggered) {
         ctx.fillStyle = color;
         ctx.shadowColor = color;
-        ctx.shadowBlur = 3;
+        ctx.shadowBlur = 8;
         ctx.beginPath();
-        ctx.arc(x, laneCenter, radius, 0, Math.PI * 2);
+        ctx.arc(refX, laneCenter, 4, 0, Math.PI * 2);
         ctx.fill();
         ctx.shadowBlur = 0;
       }
     });
-
-    // Draw playhead
-    ctx.strokeStyle = '#8a857a';
-    ctx.lineWidth = 1;
-    const playheadX = ((this.history.length - 1) / (this.maxHistory - 1)) * w;
-    ctx.beginPath();
-    ctx.moveTo(playheadX, 0);
-    ctx.lineTo(playheadX, h);
-    ctx.stroke();
   }
 
   /** Mute a hex color by reducing its opacity */
