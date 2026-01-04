@@ -1,7 +1,8 @@
-import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import { Stream, seq, _, setRegistry, getRegistry } from '../stream';
-import { Signal, T } from '../signal';
-import type { StreamRegistry } from '../stream';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { Stream, seq, _ } from '../core/stream';
+import { Signal, T } from '../core/signal';
+import { setRegistry, getRegistry } from '../runtime/registry';
+import type { StreamRegistry } from '../core/types';
 
 describe('Stream', () => {
   describe('integer crossing triggers', () => {
@@ -279,18 +280,17 @@ describe('Stream', () => {
 
   describe('registry pattern', () => {
     afterEach(() => {
-      // Clean up registry after each test
+      // Clean up global registry after each test
       setRegistry(null);
     });
 
-    it('allows testing with mock registry', () => {
+    it('allows testing with mock registry via parameter injection', () => {
       const mockRegistry: StreamRegistry = {
         register: vi.fn(),
       };
 
-      setRegistry(mockRegistry);
-
-      const stream = seq([60, 64, 67]).drive(T).as('testStream');
+      // Registry is now passed directly to as() - no global required
+      const stream = seq([60, 64, 67]).drive(T).as('testStream', mockRegistry);
 
       expect(mockRegistry.register).toHaveBeenCalledTimes(1);
       expect(mockRegistry.register).toHaveBeenCalledWith('testStream', stream);
@@ -301,23 +301,21 @@ describe('Stream', () => {
         register: vi.fn(),
       };
 
-      setRegistry(mockRegistry);
-
-      const stream = seq([60]).drive(T).as('myStream');
+      // Name is set regardless of registry
+      const stream = seq([60]).drive(T).as('myStream', mockRegistry);
 
       expect(stream.name).toBe('myStream');
     });
 
-    it('does not throw when no registry is set', () => {
-      setRegistry(null);
-
-      // Should not throw even without a registry
+    it('does not throw when no registry is provided', () => {
+      // Should not throw without a registry
       const stream = seq([60]).drive(T).as('orphan');
 
       expect(stream.name).toBe('orphan');
     });
 
-    it('getRegistry returns current registry', () => {
+    it('getRegistry/setRegistry still works for global pattern', () => {
+      // These are kept for backward compatibility with runtime/evaluator
       const mockRegistry: StreamRegistry = {
         register: vi.fn(),
       };

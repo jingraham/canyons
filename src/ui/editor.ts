@@ -5,7 +5,8 @@
 import { EditorView, basicSetup } from 'codemirror';
 import { javascript } from '@codemirror/lang-javascript';
 import { oneDark } from '@codemirror/theme-one-dark';
-import { editorHighlights } from '../editor-highlights';
+import { editorHighlights } from './highlights';
+import { EDITOR_DEBOUNCE_MS } from '../config';
 
 // Geological theme overrides for CodeMirror
 const geoTheme = EditorView.theme({
@@ -56,7 +57,7 @@ export interface EditorOptions {
  * Create a CodeMirror editor instance configured for canyons.
  */
 export function createEditor(options: EditorOptions): EditorView {
-  const { parent, initialCode, onChange, debounceMs = 500 } = options;
+  const { parent, initialCode, onChange, debounceMs = EDITOR_DEBOUNCE_MS } = options;
 
   let evalTimeout: number | null = null;
 

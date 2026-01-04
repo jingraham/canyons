@@ -5,7 +5,7 @@
  * All of these are inspectable — just functions on signals.
  */
 
-import { Signal, T } from './signal';
+import { Signal, T } from '../core/signal';
 
 // --- Time Units ---
 

@@ -5,20 +5,14 @@
  * Oldest voice stolen when full.
  */
 
-export interface MidiDevice {
-  id: string;
-  name: string;
-  output: MIDIOutput;
-}
+import {
+  DEFAULT_BEND_RANGE,
+  MPE_MIN_CHANNEL,
+  MPE_MAX_CHANNEL,
+} from '../config';
+import type { MidiDevice, ActiveVoice, OutputSink, VoiceHandle } from '../core/types';
 
-export interface ActiveVoice {
-  channel: number;
-  note: number;
-  stream: string;
-  startTime: number;
-}
-
-class MidiOutput {
+class MidiOutput implements OutputSink {
   private midiAccess: MIDIAccess | null = null;
   private output: MIDIOutput | null = null;
   private devices: MidiDevice[] = [];
@@ -26,12 +20,10 @@ class MidiOutput {
 
   // MPE voice allocation state
   private activeVoices: ActiveVoice[] = [];
-  private nextChannel = 2; // MPE lower zone starts at channel 2
-  private readonly minChannel = 2;
-  private readonly maxChannel = 16;
+  private nextChannel = MPE_MIN_CHANNEL;
 
   // MPE config
-  bendRange = 48; // ±48 semitones (MPE default)
+  bendRange = DEFAULT_BEND_RANGE;
 
   // Callbacks
   private onDevicesChanged: ((devices: MidiDevice[]) => void) | null = null;
@@ -130,7 +122,7 @@ class MidiOutput {
     // Check if we have a free channel
     const usedChannels = new Set(this.activeVoices.map((v) => v.channel));
 
-    for (let ch = this.minChannel; ch <= this.maxChannel; ch++) {
+    for (let ch = MPE_MIN_CHANNEL; ch <= MPE_MAX_CHANNEL; ch++) {
       if (!usedChannels.has(ch)) {
         this.activeVoices.push({ channel: ch, note, stream, startTime: time });
         return ch;
@@ -215,13 +207,28 @@ class MidiOutput {
     this.send([0xe0 | (channel - 1), lsb, msb]);
   }
 
-  // --- High-Level API ---
+  // --- High-Level API (OutputSink implementation) ---
 
-  /** Note on with voice allocation */
-  noteOn(stream: string, note: number, velocity: number, time: number): number {
+  /** Note on with voice allocation, returns VoiceHandle for MPE control */
+  noteOn(
+    stream: string,
+    note: number,
+    velocity: number,
+    _instrument: string, // MIDI doesn't use instrument
+    time: number
+  ): VoiceHandle | null {
+    if (!this.isReady()) return null;
+
     const channel = this.allocateChannel(stream, note, time);
     this.sendNoteOn(channel, note, velocity);
-    return channel;
+
+    // Return a VoiceHandle that captures this channel
+    return {
+      setPressure: (pressure: number) => this.sendPressure(channel, pressure),
+      setSlide: (slide: number) => this.sendSlide(channel, slide),
+      setBend: (bend: number) => this.sendBend(channel, bend),
+      release: () => this.noteOff(stream, note),
+    };
   }
 
   /** Note off with voice release */
@@ -234,7 +241,7 @@ class MidiOutput {
 
   /** Turn off all notes on all channels */
   allNotesOff(): void {
-    for (let ch = this.minChannel; ch <= this.maxChannel; ch++) {
+    for (let ch = MPE_MIN_CHANNEL; ch <= MPE_MAX_CHANNEL; ch++) {
       // All Notes Off (CC 123)
       this.send([0xb0 | (ch - 1), 123, 0]);
     }

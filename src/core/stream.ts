@@ -2,54 +2,21 @@
  * Stream — A sequence of values driven by a signal.
  *
  * Discrete events emerge from integer crossings of the driver signal.
+ * This module is pure — no global state or runtime dependencies.
  */
 
 import { Signal } from './signal';
-
-// --- Registry Pattern (breaks circular dependency with engine) ---
-
-/** Interface for stream registration (implemented by engine) */
-export interface StreamRegistry {
-  register(name: string, stream: Stream): void;
-}
-
-let currentRegistry: StreamRegistry | null = null;
-
-/** Set the active stream registry (called before evaluating user code) */
-export function setRegistry(registry: StreamRegistry | null): void {
-  currentRegistry = registry;
-}
-
-/** Get the current registry (for testing) */
-export function getRegistry(): StreamRegistry | null {
-  return currentRegistry;
-}
-
-// ---
+import { DEFAULT_VELOCITY } from '../config';
+import type {
+  SequenceValue,
+  PhaseFunction,
+  ModifierValue,
+  StreamState,
+  StreamRegistry,
+} from './types';
 
 /** Rest marker — null values in sequences are skipped */
 export const _ = null;
-
-export type NoteValue = number | null;
-export type SequenceValue = NoteValue | NoteValue[]; // single note, rest, or chord
-
-/** Function that receives phase signal and returns a signal */
-export type PhaseFunction = (phase: Signal) => Signal | number;
-
-/** Modifier value: constant, signal, or phase function */
-export type ModifierValue = number | Signal | PhaseFunction;
-
-export interface StreamState {
-  trigger: boolean;
-  note: SequenceValue;
-  velocity: number;
-  phase: number;
-  index: number;
-  gateOpen: boolean;
-  masked: boolean;
-  driverValue: number;
-  currentFloor: number;
-}
 
 export class Stream {
   readonly values: SequenceValue[];
@@ -110,11 +77,11 @@ export class Stream {
     return this;
   }
 
-  /** Register this stream with the engine */
-  as(name: string): this {
+  /** Register this stream with a registry (if provided) */
+  as(name: string, registry?: StreamRegistry | null): this {
     this.name = name;
-    if (currentRegistry) {
-      currentRegistry.register(name, this);
+    if (registry) {
+      registry.register(name, this);
     }
     return this;
   }
@@ -186,7 +153,7 @@ export class Stream {
     this._lastFloor = currentFloor;
 
     // Calculate velocity
-    const velocity = Math.max(0, Math.min(1, this.evalModifier(this._vel, t, phase, 0.7)));
+    const velocity = Math.max(0, Math.min(1, this.evalModifier(this._vel, t, phase, DEFAULT_VELOCITY)));
 
     // Calculate gate
     let gateOpen = true;

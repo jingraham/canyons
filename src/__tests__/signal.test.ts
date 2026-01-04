@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { Signal, T } from '../signal';
+import { Signal, T } from '../core/signal';
 
 describe('Signal', () => {
   describe('T (global time)', () => {

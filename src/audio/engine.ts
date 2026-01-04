@@ -3,26 +3,18 @@
  *
  * Runs at 500Hz using AudioWorklet for precise timing.
  * Falls back to setInterval at 20Hz if worklet unavailable.
+ *
+ * Uses OutputSink interface for dependency injection,
+ * enabling testing without browser audio APIs.
  */
 
-import type { Stream, StreamState } from './stream';
-import { midi } from './midi';
-import { internalSynth } from './internal-synth';
+import type { Stream, StreamState, NoteEvent, NoteCallback, TickCallback, OutputSink, VoiceHandle } from '../core/types';
+import { ENGINE_TICK_HZ, ENGINE_FALLBACK_TICK_MS, VIZ_THROTTLE_MS } from '../config';
 
-export interface NoteEvent {
-  stream: string;
-  note: number;
-  velocity: number;
-  time: number;
-  channel?: number; // MIDI channel if MIDI is enabled
-}
-
-export type NoteCallback = (event: NoteEvent) => void;
-
-/** Tracks currently sounding notes for gate handling */
+/** Tracks currently sounding notes with their voice handles */
 interface ActiveNote {
   note: number;
-  channel: number;
+  handles: VoiceHandle[];  // One handle per sink that responded
   gateOpen: boolean;
 }
 
@@ -32,7 +24,7 @@ class TickProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
     this.samplesSinceTick = 0;
-    this.samplesPerTick = Math.round(sampleRate / 500); // 500Hz
+    this.samplesPerTick = Math.round(sampleRate / ${ENGINE_TICK_HZ});
     this.running = false;
     this.startFrame = 0;
 
@@ -72,15 +64,15 @@ class Engine {
   private intervalId: number | null = null;
   private audioCtx: AudioContext | null = null;
 
+  // Output sinks (dependency injection)
+  private sinks: OutputSink[] = [];
+
   // AudioWorklet state
   private workletNode: AudioWorkletNode | null = null;
   private workletReady = false;
   private useWorklet = true;
 
   // Timing: use AudioContext.currentTime as source of truth
-  // audioStartTime = audioCtx.currentTime when engine started
-  // timeOffset = adjustment for seeking
-  // Logical time = (audioCtx.currentTime - audioStartTime) + timeOffset
   private audioStartTime = 0;
   private timeOffset = 0;
   private lastTickTime = 0;
@@ -93,18 +85,48 @@ class Engine {
 
   // Callbacks
   private onNote: NoteCallback | null = null;
-  private onTick: ((t: number, states: Map<string, StreamState>, triggers: Set<string>) => void) | null = null;
+  private onTick: TickCallback | null = null;
 
   // Throttle visualization updates (60fps max)
   private lastVizUpdate = 0;
-  private readonly vizThrottleMs = 16; // ~60fps
 
   // Accumulate triggers between viz frames
   private pendingTriggers = new Set<string>();
 
-  // Config
-  readonly tickHz = 500;
-  readonly fallbackTickMs = 50; // 20Hz fallback
+  // Config (exposed for testing)
+  readonly tickHz = ENGINE_TICK_HZ;
+  readonly fallbackTickMs = ENGINE_FALLBACK_TICK_MS;
+
+  /** Add an output sink */
+  addSink(sink: OutputSink): void {
+    this.sinks.push(sink);
+  }
+
+  /** Remove an output sink */
+  removeSink(sink: OutputSink): void {
+    const idx = this.sinks.indexOf(sink);
+    if (idx !== -1) {
+      this.sinks.splice(idx, 1);
+    }
+  }
+
+  /** Get all sinks */
+  getSinks(): OutputSink[] {
+    return this.sinks;
+  }
+
+  /** Release all handles for active notes in a stream */
+  private releaseStreamNotes(name: string): void {
+    const activeNotes = this.activeNotes.get(name);
+    if (activeNotes) {
+      for (const active of activeNotes) {
+        for (const handle of active.handles) {
+          handle.release();
+        }
+      }
+    }
+    this.activeNotes.delete(name);
+  }
 
   /** Begin a hot reload cycle - call before evaluating new code */
   beginHotReload(): void {
@@ -113,22 +135,9 @@ class Engine {
 
   /** End a hot reload cycle - removes streams that weren't re-registered */
   endHotReload(): void {
-    const midiReady = midi.isReady();
-
     for (const [name] of this.streams) {
       if (!this.touchedStreams.has(name)) {
-        // Stream wasn't touched - remove it
-        // First send note-offs for any active notes
-        const activeNotes = this.activeNotes.get(name);
-        if (activeNotes) {
-          for (const active of activeNotes) {
-            internalSynth.noteOff(name, active.note);
-            if (midiReady) {
-              midi.noteOff(name, active.note);
-            }
-          }
-        }
-        this.activeNotes.delete(name);
+        this.releaseStreamNotes(name);
         this.streams.delete(name);
       }
     }
@@ -142,19 +151,8 @@ class Engine {
     if (existing) {
       // Hot reload: transfer state from old stream to new
       stream.transferStateFrom(existing);
-
-      // Send note-off for any currently sounding notes before structural change
-      const midiReady = midi.isReady();
-      const activeNotes = this.activeNotes.get(name);
-      if (activeNotes) {
-        for (const active of activeNotes) {
-          internalSynth.noteOff(name, active.note);
-          if (midiReady) {
-            midi.noteOff(name, active.note);
-          }
-        }
-      }
-      this.activeNotes.delete(name);
+      // Release any currently sounding notes before structural change
+      this.releaseStreamNotes(name);
     }
 
     this.streams.set(name, stream);
@@ -167,32 +165,14 @@ class Engine {
 
   /** Stop and remove a stream */
   stop(name: string): void {
-    // Send note-offs for any active notes
-    const activeNotes = this.activeNotes.get(name);
-    if (activeNotes) {
-      const midiReady = midi.isReady();
-      for (const active of activeNotes) {
-        internalSynth.noteOff(name, active.note);
-        if (midiReady) {
-          midi.noteOff(name, active.note);
-        }
-      }
-    }
-    this.activeNotes.delete(name);
+    this.releaseStreamNotes(name);
     this.streams.delete(name);
   }
 
   /** Stop all streams */
   hush(): void {
-    // Send note-offs for all active notes
-    const midiReady = midi.isReady();
-    for (const [name, activeNotes] of this.activeNotes) {
-      for (const active of activeNotes) {
-        internalSynth.noteOff(name, active.note);
-        if (midiReady) {
-          midi.noteOff(name, active.note);
-        }
-      }
+    for (const [name] of this.activeNotes) {
+      this.releaseStreamNotes(name);
     }
     this.activeNotes.clear();
     this.streams.clear();
@@ -209,7 +189,7 @@ class Engine {
   }
 
   /** Set tick callback (for visualization) */
-  setTickCallback(cb: (t: number, states: Map<string, StreamState>, triggers: Set<string>) => void): void {
+  setTickCallback(cb: TickCallback): void {
     this.onTick = cb;
   }
 
@@ -244,7 +224,7 @@ class Engine {
       };
 
       this.workletReady = true;
-      console.log('AudioWorklet initialized (500Hz tick)');
+      console.log(`AudioWorklet initialized (${ENGINE_TICK_HZ}Hz tick)`);
       return true;
     } catch (err) {
       console.warn('AudioWorklet not available, falling back to setInterval:', err);
@@ -279,13 +259,12 @@ class Engine {
     }
     this.activeNotes.clear();
 
-    // Initialize internal synth with audio context
-    internalSynth.setAudioContext(ctx);
-
-    // Send all notes off to start clean
-    internalSynth.allNotesOff();
-    if (midi.isReady()) {
-      midi.allNotesOff();
+    // Initialize all sinks with audio context
+    for (const sink of this.sinks) {
+      if (sink.init) {
+        sink.init(ctx);
+      }
+      sink.allNotesOff();
     }
 
     if (this.useWorklet && this.workletReady && this.workletNode) {
@@ -295,7 +274,6 @@ class Engine {
       // Fallback to setInterval (use audio time for consistency)
       this.intervalId = window.setInterval(() => {
         if (this.audioCtx) {
-          // Pass raw elapsed audio time; tick() applies timeOffset
           const rawTime = this.audioCtx.currentTime - this.audioStartTime;
           this.tick(rawTime);
         }
@@ -316,10 +294,9 @@ class Engine {
       this.intervalId = null;
     }
 
-    // Send all notes off
-    internalSynth.allNotesOff();
-    if (midi.isReady()) {
-      midi.allNotesOff();
+    // Send all notes off to all sinks
+    for (const sink of this.sinks) {
+      sink.allNotesOff();
     }
     this.activeNotes.clear();
   }
@@ -339,10 +316,6 @@ class Engine {
   seekTo(targetTime: number): void {
     if (!this.audioCtx) return;
 
-    // Calculate offset to achieve target logical time
-    // Logical time = (audioCtx.currentTime - audioStartTime) + timeOffset
-    // targetTime = (audioCtx.currentTime - audioStartTime) + newOffset
-    // newOffset = targetTime - (audioCtx.currentTime - audioStartTime)
     const elapsed = this.audioCtx.currentTime - this.audioStartTime;
     this.timeOffset = targetTime - elapsed;
 
@@ -356,12 +329,10 @@ class Engine {
   private tick(rawTime: number): void {
     if (!this.running) return;
 
-    // Store raw time and apply offset for logical time
     this.lastTickTime = rawTime;
     const t = rawTime + this.timeOffset;
 
     const states = new Map<string, StreamState>();
-    const midiReady = midi.isReady();
 
     for (const [name, stream] of this.streams) {
       const state = stream.tick(t);
@@ -377,11 +348,10 @@ class Engine {
         // Accumulate trigger for viz
         this.pendingTriggers.add(name);
 
-        // Turn off any currently active notes for this stream before new trigger
+        // Release any currently active notes for this stream before new trigger
         for (const activeNote of streamNotes) {
-          internalSynth.noteOff(name, activeNote.note);
-          if (midiReady) {
-            midi.noteOff(name, activeNote.note);
+          for (const handle of activeNote.handles) {
+            handle.release();
           }
         }
         streamNotes.length = 0;
@@ -392,17 +362,19 @@ class Engine {
         for (const note of notes) {
           if (note === null) continue;
 
-          // Play internal sound (MIDI/MPE driven voice)
-          internalSynth.noteOn(name, note, state.velocity, stream.instrument, t);
-
-          // Send external MIDI note on
-          let channel = 0;
-          if (midiReady) {
-            channel = midi.noteOn(name, note, state.velocity, t);
+          // Send note to all sinks, collect handles
+          const handles: VoiceHandle[] = [];
+          for (const sink of this.sinks) {
+            if (sink.isReady()) {
+              const handle = sink.noteOn(name, note, state.velocity, stream.instrument, t);
+              if (handle) {
+                handles.push(handle);
+              }
+            }
           }
 
-          // Track active note
-          streamNotes.push({ note, channel, gateOpen: true });
+          // Track active note with its handles
+          streamNotes.push({ note, handles, gateOpen: true });
 
           // Fire callback
           if (this.onNote) {
@@ -411,7 +383,6 @@ class Engine {
               note,
               velocity: state.velocity,
               time: t,
-              channel: midiReady ? channel : undefined,
             });
           }
         }
@@ -420,33 +391,27 @@ class Engine {
       // Handle gate changes for active notes
       for (const activeNote of streamNotes) {
         if (activeNote.gateOpen && !state.gateOpen) {
-          // Gate just closed — send note off to both internal and external
-          internalSynth.noteOff(name, activeNote.note);
-          if (midiReady) {
-            midi.noteOff(name, activeNote.note);
+          // Gate just closed — release all handles
+          for (const handle of activeNote.handles) {
+            handle.release();
           }
           activeNote.gateOpen = false;
         }
       }
 
-      // Send continuous MPE data for active notes (both internal and external)
+      // Send continuous MPE data for active notes
       if (streamNotes.length > 0) {
         const pressure = stream.getPressure(t, state.phase);
         const slide = stream.getSlide(t, state.phase);
         const bend = stream.getBend(t, state.phase);
 
-        // Send to internal synth (always)
-        if (pressure !== 0) internalSynth.sendPressure(name, pressure);
-        if (slide !== 0) internalSynth.sendSlide(name, slide);
-        if (bend !== 0) internalSynth.sendBend(name, bend);
-
-        // Send to external MIDI
-        if (midiReady) {
-          for (const activeNote of streamNotes) {
-            if (activeNote.gateOpen) {
-              if (pressure !== 0) midi.sendPressure(activeNote.channel, pressure);
-              if (slide !== 0) midi.sendSlide(activeNote.channel, slide);
-              if (bend !== 0) midi.sendBend(activeNote.channel, bend);
+        // Update all active voice handles
+        for (const activeNote of streamNotes) {
+          if (activeNote.gateOpen) {
+            for (const handle of activeNote.handles) {
+              if (pressure !== 0) handle.setPressure(pressure);
+              if (slide !== 0) handle.setSlide(slide);
+              if (bend !== 0) handle.setBend(bend);
             }
           }
         }
@@ -455,16 +420,11 @@ class Engine {
 
     // Throttle visualization updates to 60fps
     const now = performance.now();
-    if (this.onTick && now - this.lastVizUpdate >= this.vizThrottleMs) {
+    if (this.onTick && now - this.lastVizUpdate >= VIZ_THROTTLE_MS) {
       this.lastVizUpdate = now;
       this.onTick(t, states, new Set(this.pendingTriggers));
       this.pendingTriggers.clear();
     }
-  }
-
-  /** Get the MIDI output instance */
-  getMidi() {
-    return midi;
   }
 }
 

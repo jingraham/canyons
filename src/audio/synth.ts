@@ -10,19 +10,13 @@
  * This ensures one unified code path for both internal and external control.
  */
 
-export interface InternalVoice {
-  note: number;
-  channel: number;
-  stream: string;
-  startTime: number;
-  instrument: string;
-
-  // Control methods
-  setPressure(pressure: number): void;
-  setSlide(slide: number): void;
-  setBend(bend: number): void;
-  release(): void;
-}
+import {
+  MAX_VOICES,
+  DEFAULT_BEND_RANGE,
+  VOICE_CLEANUP_MS,
+  KNOWN_INSTRUMENTS,
+} from '../config';
+import type { InternalVoice, OutputSink, VoiceHandle } from '../core/types';
 
 /** Convert MIDI note to frequency */
 function midiToFreq(midi: number): number {
@@ -30,7 +24,7 @@ function midiToFreq(midi: number): number {
 }
 
 /** Create a soft saturation curve for analog warmth */
-function createSaturationCurve(amount: number = 0.7): Float32Array<ArrayBuffer> {
+function createSaturationCurve(amount: number = 0.7): Float32Array {
   const samples = 256;
   const curve = new Float32Array(samples);
   for (let i = 0; i < samples; i++) {
@@ -38,7 +32,7 @@ function createSaturationCurve(amount: number = 0.7): Float32Array<ArrayBuffer> 
     // Soft clipping with tanh-like curve
     curve[i] = Math.tanh(x * (1 + amount * 2)) * (1 - amount * 0.1);
   }
-  return curve as Float32Array<ArrayBuffer>;
+  return curve;
 }
 
 /**
@@ -91,7 +85,7 @@ function createVoice(
 
   // Saturation for analog warmth (more for saw/square)
   const satAmount = (instrument === 'saw' || instrument === 'square') ? 0.8 : 0.4;
-  saturator.curve = createSaturationCurve(satAmount);
+  saturator.curve = createSaturationCurve(satAmount) as Float32Array<ArrayBuffer>;
   saturator.oversample = '2x'; // Reduce aliasing
 
   // Gain envelope
@@ -107,7 +101,7 @@ function createVoice(
   osc.start();
 
   // Bend range in semitones (matches MPE default)
-  const bendRange = 48;
+  const bendRange = DEFAULT_BEND_RANGE;
 
   return {
     note,
@@ -154,7 +148,7 @@ function createVoice(
         filter.disconnect();
         saturator.disconnect();
         gain.disconnect();
-      }, 150);
+      }, VOICE_CLEANUP_MS);
     },
   };
 }
@@ -259,7 +253,7 @@ function createPluckVoice(
         source.disconnect();
         filter.disconnect();
         gain.disconnect();
-      }, 150);
+      }, VOICE_CLEANUP_MS);
     },
   };
 }
@@ -375,51 +369,55 @@ function createDrumVoice(
 
 /**
  * Internal Synth Engine - MIDI/MPE compatible voice management.
+ * Implements OutputSink for dependency injection.
  */
-class InternalSynth {
+class InternalSynth implements OutputSink {
   private audioCtx: AudioContext | null = null;
   private voices: InternalVoice[] = [];
   private nextChannel = 1;
-  private readonly maxVoices = 16;
   private warnedInstruments = new Set<string>();
 
-  /** Set the audio context */
-  setAudioContext(ctx: AudioContext): void {
+  /** Initialize with AudioContext */
+  init(ctx: AudioContext): void {
     this.audioCtx = ctx;
   }
 
-  /** Note on - allocate voice and start sound */
+  /** Check if synth is ready */
+  isReady(): boolean {
+    return this.audioCtx !== null;
+  }
+
+  /** @deprecated Use init() instead */
+  setAudioContext(ctx: AudioContext): void {
+    this.init(ctx);
+  }
+
+  /** Note on - allocate voice and start sound, returns VoiceHandle */
   noteOn(
     stream: string,
     note: number,
     velocity: number,
     instrument: string,
     time: number
-  ): number {
-    if (!this.audioCtx) return 0;
+  ): VoiceHandle | null {
+    if (!this.audioCtx) return null;
 
     // Allocate channel (round-robin)
     const channel = this.nextChannel;
-    this.nextChannel = (this.nextChannel % this.maxVoices) + 1;
+    this.nextChannel = (this.nextChannel % MAX_VOICES) + 1;
 
     // Steal oldest voice if at max
-    if (this.voices.length >= this.maxVoices) {
+    if (this.voices.length >= MAX_VOICES) {
       const oldest = this.voices.shift();
       oldest?.release();
     }
 
-    // Known instruments for this synth
-    const knownInstruments = [
-      'sine', 'saw', 'square', 'triangle', 'piano', 'epiano',
-      'kick', 'snare', 'hihat', 'pluck', 'pluckBass'
-    ];
-
     // Warn once per unknown instrument
-    if (!knownInstruments.includes(instrument) && !this.warnedInstruments.has(instrument)) {
+    if (!KNOWN_INSTRUMENTS.includes(instrument as any) && !this.warnedInstruments.has(instrument)) {
       this.warnedInstruments.add(instrument);
       console.warn(
         `[canyons] Unknown instrument "${instrument}", falling back to "sine". ` +
-        `Available: ${knownInstruments.join(', ')}`
+        `Available: ${KNOWN_INSTRUMENTS.join(', ')}`
       );
     }
 
@@ -459,7 +457,7 @@ class InternalSynth {
     }
 
     this.voices.push(voice);
-    return channel;
+    return voice;
   }
 
   /** Note off - release voice */

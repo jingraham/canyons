@@ -2,13 +2,10 @@
  * Visualization — Stream and signal visualization for canyons.
  */
 
-import type { Stream, StreamState } from '../stream';
+import type { Stream, StreamState, HistoryEntry } from '../core/types';
+import { VIZ_HISTORY_SIZE } from '../config';
 
-export interface HistoryEntry {
-  t: number;
-  streams: Map<string, StreamState>;
-  triggers: Set<string>;
-}
+export type { HistoryEntry };
 
 export class Visualizer {
   private canvas: HTMLCanvasElement;
@@ -20,7 +17,7 @@ export class Visualizer {
   constructor(
     canvas: HTMLCanvasElement,
     streamsContainer: HTMLElement,
-    maxHistory = 200
+    maxHistory = VIZ_HISTORY_SIZE
   ) {
     this.canvas = canvas;
     this.streamsContainer = streamsContainer;

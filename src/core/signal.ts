@@ -4,7 +4,9 @@
  * This is the core primitive of canyons. Everything flows from signals.
  */
 
-export type SignalFn = (t: number) => number;
+import type { SignalFn } from './types';
+
+export type { SignalFn };
 
 export class Signal {
   private _fn: SignalFn;

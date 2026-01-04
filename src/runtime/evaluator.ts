@@ -2,17 +2,48 @@
  * Evaluator — Sandboxed execution of user code with canyons primitives.
  */
 
+import { Signal, T } from '../core/signal';
+import { Stream, _ } from '../core/stream';
+import { engine, stop, hush } from '../audio/engine';
+import { midi } from '../audio/midi';
+import type { StreamRegistry, SequenceValue } from '../core/types';
 import {
-  T, seq, _, engine, midi, stop, hush,
-  bpm, hz, swell, attack, decay, legato, stacc, tenuto,
-  breath, vibrato, crescendo, decrescendo, onBeat, offBeat
-} from './index';
-import { setRegistry } from './stream';
+  bpm,
+  hz,
+  swell,
+  attack,
+  decay,
+  legato,
+  stacc,
+  tenuto,
+  breath,
+  vibrato,
+  crescendo,
+  decrescendo,
+  onBeat,
+  offBeat,
+} from './prelude';
 
 export interface EvalResult {
   success: boolean;
   error?: Error;
   values?: Record<string, unknown>;
+}
+
+/**
+ * Create a seq function that injects the registry into .as() calls.
+ * This keeps core/stream.ts pure while enabling automatic registration.
+ */
+function createSeqWithRegistry(registry: StreamRegistry) {
+  return (values: SequenceValue[]) => ({
+    drive(signal: Signal): Stream {
+      const stream = new Stream(values, signal);
+      // Override as() to inject the registry
+      const originalAs = stream.as.bind(stream);
+      stream.as = (name: string) => originalAs(name, registry);
+      return stream;
+    },
+  });
 }
 
 /** Extract const names from code for signal detection */
@@ -39,11 +70,11 @@ function wrapCodeForSignalDetection(code: string, constNames: string[]): string 
  */
 export function evaluateCode(code: string): EvalResult {
   try {
-    // Set up registry so .as() calls register with engine
-    setRegistry(engine);
-
     // Hot reload: mark start of eval cycle
     engine.beginHotReload();
+
+    // Create seq with registry injection (keeps core/ pure)
+    const seq = createSeqWithRegistry(engine);
 
     // Extract const names for signal detection
     const constNames = extractConstNames(code);

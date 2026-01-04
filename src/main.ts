@@ -9,15 +9,20 @@
  * - UI bindings
  */
 
-import { engine, midi } from './index';
-import { Signal } from './signal';
+import { engine, midi, internalSynth } from './audio';
+import { Signal } from './core/signal';
 import { createEditor, setEditorContent } from './ui/editor';
 import { Visualizer } from './ui/viz';
-import { evaluateCode } from './evaluator';
+import { evaluateCode } from './runtime/evaluator';
 import {
-  updateHighlights, updateSeqInfo, updateSignalPlots,
-  parseConstPositions, registerSignal, clearSignalRegistry, rebuildSignalPlots
-} from './editor-highlights';
+  updateHighlights,
+  updateSeqInfo,
+  updateSignalPlots,
+  parseConstPositions,
+  registerSignal,
+  clearSignalRegistry,
+  rebuildSignalPlots,
+} from './ui/highlights';
 import type { EditorView } from 'codemirror';
 
 // --- Examples ---
@@ -276,6 +281,12 @@ editor = createEditor({
 // Initial evaluation
 evalCode(defaultCode);
 updateSeqInfo(editor, defaultCode);
+
+// --- Wire Output Sinks ---
+
+// Register output sinks with the engine (dependency injection)
+engine.addSink(internalSynth);  // Internal Web Audio synth (always active)
+engine.addSink(midi);           // External MIDI (active when device selected)
 
 // --- Engine Callbacks ---
 

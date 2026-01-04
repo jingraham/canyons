@@ -15,6 +15,8 @@ import {
 } from '@codemirror/view';
 import { StateField, StateEffect, RangeSetBuilder } from '@codemirror/state';
 
+import { Signal } from '../core/signal';
+
 // --- Types ---
 
 interface SeqElement {
@@ -261,8 +263,6 @@ const highlightPlugin = ViewPlugin.fromClass(
 );
 
 // --- Live Signal Plot Widgets ---
-
-import { Signal } from './signal';
 
 /** Registered signal with analyzed properties */
 interface RegisteredSignal {
